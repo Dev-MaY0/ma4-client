@@ -18,6 +18,6 @@ private:
     ValueType maxMinutes = FloatValue(10.f);
     ValueType recordEntities = BoolValue(true);
     ValueType recordTerrain = BoolValue(true);
-    ValueType terrainRadius = FloatValue(3.f);
+    ValueType terrainRadius = FloatValue(6.f);
     ValueType autoRecord = BoolValue(false);
 };

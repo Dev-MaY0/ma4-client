@@ -21,8 +21,8 @@ namespace SDK {
 class TerrainRecorder {
 public:
     struct Config {
-        int radiusChunks = 3;    // chunks around the player that are mapped
-        int columnBudget = 160;  // columns sampled per tick
+        int radiusChunks = 6;    // chunks around the player that are mapped (1..12)
+        int columnBudget = 256;  // columns sampled per tick
     };
 
     void reset();
@@ -47,6 +47,7 @@ private:
         ios::ReplayTerrainChunk data;
         uint16_t cursor = 0;
         uint16_t unknown = 0;
+        uint16_t known = 0;
         uint8_t passes = 0;
         std::chrono::steady_clock::time_point retryAt;
     };

@@ -17,7 +17,7 @@ namespace ios {
         constexpr float kMargin = 20.f;
         constexpr float kGroupR = 12.f;
         constexpr float kRowH = 44.f;
-        constexpr float kModRowH = 64.f;
+        constexpr float kModRowH = 56.f;
 
         constexpr uint64_t kIdOpen = 0x0A110001ull;
         constexpr uint64_t kIdPush = 0x0A110002ull;
@@ -683,12 +683,12 @@ namespace ios {
 
             // texts
             Rect textR(tile.right + S(13.f), rc.top, right, rc.bottom);
-            std::wstring sub = m.desc;
+            // module descriptions are not shown; only a plugin's author line stays
+            std::wstring sub;
             if (m.market && !m.author.empty()) {
-                std::wstring by = f.str.byAuthor;
-                size_t p = by.find(L"%s");
-                if (p != std::wstring::npos) by.replace(p, 2, m.author);
-                sub = sub.empty() ? by : by + L"  \u00B7  " + sub;
+                sub = f.str.byAuthor;
+                size_t p = sub.find(L"%s");
+                if (p != std::wstring::npos) sub.replace(p, 2, m.author);
             }
             float th = S(22.f), sh = sub.empty() ? 0.f : S(17.f);
             float block = th + sh;
@@ -866,9 +866,11 @@ namespace ios {
             float swW = toggleable ? S(51.f) + S(16.f) : 0.f;
             float textW = w - S(16.f) - tileS - S(14.f) - S(16.f) - swW;
             TextStyle ds(Font::Regular, S(14.f), pal.secondaryLabel, HAlign::Leading, VAlign::Top, true);
-            float descH = d.desc.empty() ? 0.f : std::min(ui.measure(d.desc, ds, textW).y, S(14.f) * 1.4f * 4.f);
+            float descH = 0.f; // module descriptions are not shown
+            (void)ds;
+            (void)textW;
             float nameH = S(28.f);
-            float cardH = std::max(S(96.f), S(16.f) + nameH + (descH > 0.f ? S(4.f) + descH : 0.f) + S(16.f));
+            float cardH = std::max(S(88.f), S(16.f) + nameH + (descH > 0.f ? S(4.f) + descH : 0.f) + S(16.f));
             Rect card(x, y, x + w, y + cardH);
             ui.fillSmooth(card, S(kGroupR), pal.cell);
             Rect tile(card.left + S(16.f), card.centerY() - tileS * 0.5f, card.left + S(16.f) + tileS,

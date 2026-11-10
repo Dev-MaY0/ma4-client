@@ -28,9 +28,9 @@ ReplayRecorder::ReplayRecorder()
     terSetting->callback = [this](Setting&) {
         applyConfig();
     };
-    auto radSetting = addSliderSetting("terrainRadius", LocalizeString::get("client.module.replay.terrainRadius.name"),
+    auto radSetting = addSliderSetting("mapRadius", LocalizeString::get("client.module.replay.terrainRadius.name"),
                                        LocalizeString::get("client.module.replay.terrainRadius.desc"), terrainRadius,
-                                       FloatValue(1.f), FloatValue(8.f), FloatValue(1.f), "recordTerrain"_istrue);
+                                       FloatValue(1.f), FloatValue(12.f), FloatValue(1.f), "recordTerrain"_istrue);
     radSetting->callback = [this](Setting&) {
         applyConfig();
     };
@@ -51,7 +51,7 @@ void ReplayRecorder::applyConfig() {
     cfg.maxMinutes = std::clamp(std::get<FloatValue>(maxMinutes).value, 1.f, 30.f);
     cfg.recordEntities = std::get<BoolValue>(recordEntities).value;
     cfg.recordTerrain = std::get<BoolValue>(recordTerrain).value;
-    cfg.terrainRadius = std::clamp(static_cast<int>(std::get<FloatValue>(terrainRadius).value), 1, 8);
+    cfg.terrainRadius = std::clamp(static_cast<int>(std::get<FloatValue>(terrainRadius).value), 1, 12);
 }
 
 void ReplayRecorder::onKey(Event& evG) {

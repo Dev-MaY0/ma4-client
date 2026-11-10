@@ -3,6 +3,19 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.0.3] - 2026-11-10
+
+### Changed
+- HUD editor (opened with the menu key): the hint line "drag to move / scroll to resize / right-click for settings /
+  middle-click to hide" is gone; only the *Mod Settings* button is left.
+- The menu no longer shows module descriptions: the grey line under every module in the list and under the module name
+  on the detail page are removed (plugin rows keep their "by author" line, per-setting descriptions are unchanged).
+  List rows are a little shorter as a result.
+- **Bigger replay map.** Default map radius 3 -> 6 chunks, up to 12 (slider *Map Radius*, new setting key so the old
+  saved value does not override it), 256 columns per tick (was 160), the scan reaches 32 blocks above you (was 24),
+  and chunks that were not loaded yet are retried up to 8 times with growing delays; fully unloaded chunks are skipped
+  cheaply.
+
 ## [1.0.2] - 2026-11-10
 
 ### Fixed

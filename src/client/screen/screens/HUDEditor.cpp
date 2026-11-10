@@ -87,7 +87,7 @@ void HUDEditor::onRender(Event& ev) {
             float buttonWidth = S(236.f);
             float buttonHeight = S(54.f);
             d2d::Rect ssRec = { 0.f, 0.f, ss.width, ss.height };
-            Vec2 btnPos = ssRec.center({ buttonWidth, buttonHeight + S(46.f) });
+            Vec2 btnPos = ssRec.center({ buttonWidth, buttonHeight });
             d2d::Rect btnRect = { btnPos, Vec2(btnPos.x + buttonWidth, btnPos.y + buttonHeight) };
 
             // only react when no HUD element is covering the button
@@ -113,14 +113,6 @@ void HUDEditor::onRender(Event& ev) {
                     ios::TextStyle(ios::Font::Semibold, S(18.f), ui.pal.label, ios::HAlign::Leading, ios::VAlign::Center));
             ui.ctx()->SetTransform(oldT);
 
-            // hint line
-            std::wstring hint = LocalizeString::get("client.ui.hudEditor.hint");
-            ios::TextStyle hs(ios::Font::Medium, S(13.f), ui.pal.secondaryLabel, ios::HAlign::Center, ios::VAlign::Center);
-            float hw = std::min(ui.textWidth(hint, hs) + S(28.f), ss.width - S(40.f));
-            d2d::Rect hr(ssRec.centerX() - hw * 0.5f, btnRect.bottom + S(16.f), ssRec.centerX() + hw * 0.5f,
-                         btnRect.bottom + S(16.f) + S(30.f));
-            ui.rrect(hr, hr.getHeight() * 0.5f, ui.pal.material);
-            ui.text(hr, hint, hs);
             ui.popOpacity();
             ui.endFrame();
 

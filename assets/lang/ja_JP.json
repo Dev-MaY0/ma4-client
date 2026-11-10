@@ -5,7 +5,6 @@
     "client.intro.menubutton": "ワールド またはサーバーで {} を押してmodメニューを開きます。",
     "client.modules.blockedOnServer.name": "{} はこのサーバーではブロックされます。",
     "client.ui.hudEditor.modSettings.name": "Mod設定",
-    "client.ui.hudEditor.hint": "ドラッグで移動  •  スクロールで拡大縮小  •  右クリックで設定  •  中クリックで非表示",
     "client.ui.clickGui.search.name": "検索",
     "client.ui.clickGui.searchSettings.name": "検索設定",
     "client.ui.clickGui.tab.all.name": "すべて",

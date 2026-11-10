@@ -30,7 +30,7 @@ public:
         float maxMinutes = 10.f;
         bool recordEntities = true;
         bool recordTerrain = true;
-        int terrainRadius = 3; // chunks
+        int terrainRadius = 6; // chunks
         float radius = 64.f;
         size_t entityLimit = 40;
     } config;

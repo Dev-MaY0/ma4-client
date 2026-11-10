@@ -282,7 +282,7 @@ namespace {
     std::vector<std::pair<int, int>> const& offsetsByDistance() {
         static const std::vector<std::pair<int, int>> offsets = [] {
             std::vector<std::pair<int, int>> v;
-            const int R = 8;
+            const int R = 12;
             for (int dz = -R; dz <= R; ++dz) {
                 for (int dx = -R; dx <= R; ++dx) {
                     if (dx * dx + dz * dz <= R * R + R) v.emplace_back(dx, dz);
@@ -360,9 +360,9 @@ void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Co
     const int py = static_cast<int>(std::floor(playerPos.y));
     const int pz = static_cast<int>(std::floor(playerPos.z));
     const int pcx = floorDiv16(px), pcz = floorDiv16(pz);
-    const int yTop = std::clamp(py + 24, -64, 319);
+    const int yTop = std::clamp(py + 32, -64, 319);
     const int yBottom = std::clamp(py - 48, -64, 319);
-    const int radius = std::clamp(cfg.radiusChunks, 1, 8);
+    const int radius = std::clamp(cfg.radiusChunks, 1, 12);
     const auto now = std::chrono::steady_clock::now();
 
     int budget = std::max(16, cfg.columnBudget);
@@ -378,7 +378,7 @@ void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Co
 
         if (b.cursor >= 256) {
             // finished; a few columns may have been unloaded the first time, try again a couple of times
-            if (b.unknown > 40 && b.passes < 3 && now >= b.retryAt) {
+            if (b.unknown > 8 && b.passes < 8 && now >= b.retryAt) {
                 b.cursor = 0;
                 b.unknown = 0;
                 ++b.passes;
@@ -394,14 +394,21 @@ void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Co
             if (sampleColumnGuarded(region, cx * 16 + lx, cz * 16 + lz, yTop, yBottom, rgb, h)) {
                 std::memcpy(&b.data.rgb[b.cursor * 3], rgb, 3);
                 b.data.height[b.cursor] = h;
+                if (b.data.height[b.cursor] == ios::ReplayTerrainChunk::kUnknown) ++b.known;
             } else if (b.data.height[b.cursor] == ios::ReplayTerrainChunk::kUnknown) {
                 ++b.unknown;
+                // a chunk that has produced nothing after a couple of rows is almost certainly not loaded yet:
+                // skip the rest of this pass instead of scanning 200+ empty columns (it is retried later)
+                if (b.known == 0 && b.cursor >= 31) {
+                    b.unknown = 256;
+                    b.cursor = 255;
+                }
             }
             ++b.cursor;
             --budget;
             if (disabled) return;
         }
-        if (b.cursor >= 256) b.retryAt = now + std::chrono::seconds(4);
+        if (b.cursor >= 256) b.retryAt = now + std::chrono::seconds(3 * (b.passes + 1));
         if (budget <= 0) break;
     }
 }
