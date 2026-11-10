@@ -9,10 +9,13 @@ After **every update you finish in this project**:
 
 1. Bump the version (semver, e.g. 1.0.1 -> 1.0.2) and add a section for it at the top of `CHANGELOG.md`.
 2. Make sure `cmake --preset x64-release && cmake --build out/build/x64-release` succeeds (see "Build").
-3. Run `powershell -File tools/publish.ps1 -Version X.Y.Z -Message "<summary>"` - it commits everything, tags `vX.Y.Z`
-   and pushes to `origin main`. It refuses to run if the git top-level is not this folder, and it never force-pushes.
-   Add the usual `Co-Authored-By` trailer to the message when you commit.
-4. If the push fails (sign-in / token), say so and tell the owner what is needed. Never bypass it with `--force`.
+3. Commit + tag locally with `tools/publish.ps1 -Version X.Y.Z -Message "<summary>" -NoPush` (add the usual
+   `Co-Authored-By` trailer to the message). It commits everything, tags `vX.Y.Z`, refuses to run if the git top-level
+   is not this folder and never force-pushes.
+4. Push from the **user's Terminal panel** (`run_in_terminal`, cwd = this folder): `git push origin main --tags`.
+   The Bash / PowerShell tools of a session have no GitHub credentials (push fails with "could not read Username");
+   the user's own terminal has Git Credential Manager and works. If even that asks for a sign-in, tell the user and
+   wait. Never bypass it with `--force`.
 
 Do not commit build output (`out/` is git-ignored) or personal files. The folder lives inside the user's home folder,
 which is itself a git repository - always work with the repository in this folder (`git -C <this folder>`).
