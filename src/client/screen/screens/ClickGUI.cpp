@@ -289,6 +289,9 @@ void ClickGUI::fillModules(ios::Frame& f) {
 
 void ClickGUI::fillReplay(ios::Frame& f) {
     auto& store = ReplayStore::get();
+    if (store.consumeError()) {
+        Ma4::getNotifications().push(LocalizeString::get("client.ui.replay.error").value());
+    }
     f.replay.available = true;
     f.replay.recording = store.isRecording();
     f.replay.recordingSeconds = store.recordingSeconds();

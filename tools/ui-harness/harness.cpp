@@ -260,7 +260,7 @@ static void buildFrame(Frame& f, Env& e, bool hudPreview) {
     f.replay.toggleRecording = [] {};
     f.replay.addMarker = [] {};
     f.replay.remove = [](uint64_t) {};
-    f.version = L"v1.0.1";
+    f.version = L"v1.0.2";
     f.str.appName = L"ma4";
     f.logo = e.logo.Get();
     struct M {

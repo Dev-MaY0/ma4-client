@@ -319,7 +319,7 @@ TerrainRecorder::BlockInfo const& TerrainRecorder::classify(SDK::BlockLegacy* le
 bool TerrainRecorder::sampleColumn(SDK::BlockSource* region, int x, int z, int yTop, int yBottom, uint8_t rgb[3],
                                    int16_t& height) {
     for (int y = yTop; y >= yBottom; --y) {
-        SDK::Block* block = region->getBlock(x, y, z);
+        SDK::Block* block = region->getBlock(BlockPos(x, y, z));
         if (!block) continue;
         BlockInfo const info = classify(block->legacyBlock);
         if (info.kind == Kind::Skip) continue;
@@ -327,7 +327,7 @@ bool TerrainRecorder::sampleColumn(SDK::BlockSource* region, int x, int z, int y
         if (info.kind == Kind::Liquid) {
             int depth = 1;
             for (int yy = y - 1; yy >= yBottom && depth < 14; --yy) {
-                SDK::Block* below = region->getBlock(x, yy, z);
+                SDK::Block* below = region->getBlock(BlockPos(x, yy, z));
                 if (!below || classify(below->legacyBlock).kind != Kind::Liquid) break;
                 ++depth;
             }
@@ -342,8 +342,19 @@ bool TerrainRecorder::sampleColumn(SDK::BlockSource* region, int x, int z, int y
     return false;
 }
 
+bool TerrainRecorder::sampleColumnGuarded(SDK::BlockSource* region, int x, int z, int yTop, int yBottom,
+                                           uint8_t rgb[3], int16_t& height) {
+    // No objects with destructors in this function: it only forwards to sampleColumn and survives an access violation.
+    __try {
+        return sampleColumn(region, x, z, yTop, yBottom, rgb, height);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        disabled = true;
+        return false;
+    }
+}
+
 void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Config const& cfg) {
-    if (!region) return;
+    if (!region || disabled) return;
 
     const int px = static_cast<int>(std::floor(playerPos.x));
     const int py = static_cast<int>(std::floor(playerPos.y));
@@ -380,7 +391,7 @@ void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Co
             const int lx = b.cursor & 15, lz = b.cursor >> 4;
             uint8_t rgb[3];
             int16_t h;
-            if (sampleColumn(region, cx * 16 + lx, cz * 16 + lz, yTop, yBottom, rgb, h)) {
+            if (sampleColumnGuarded(region, cx * 16 + lx, cz * 16 + lz, yTop, yBottom, rgb, h)) {
                 std::memcpy(&b.data.rgb[b.cursor * 3], rgb, 3);
                 b.data.height[b.cursor] = h;
             } else if (b.data.height[b.cursor] == ios::ReplayTerrainChunk::kUnknown) {
@@ -388,6 +399,7 @@ void TerrainRecorder::update(SDK::BlockSource* region, Vec3 const& playerPos, Co
             }
             ++b.cursor;
             --budget;
+            if (disabled) return;
         }
         if (b.cursor >= 256) b.retryAt = now + std::chrono::seconds(4);
         if (budget <= 0) break;

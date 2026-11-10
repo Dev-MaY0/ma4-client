@@ -3,6 +3,20 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.0.2] - 2026-11-10
+
+### Fixed
+- **Game crash when a replay recording started.** The map sampler called `BlockSource::getBlock(x, y, z)`, which lands
+  in the wrong vtable slot on this build (the game read the x coordinate as a pointer -> access violation). It now uses
+  the `getBlock(BlockPos)` overload that WAILA already relies on.
+- Replay hardening: every read of game memory (nearby entities, block source, blocks) is guarded; if one ever faults the
+  recording is stopped (or the map switched off) with a log line and a notification instead of crashing the game.
+  Actor components are null-checked, the level comes from `Minecraft::getLevel()` like in the other modules, and the
+  recorder is protected against the menu (render thread) and the game tick racing each other.
+
+### Changed
+- Docs: the data folder is `%LocalAppData%\ma4` (logs and crash dumps are in `%LocalAppData%\ma4\Logs`).
+
 ## [1.0.1] - 2026-11-10
 
 ### Added

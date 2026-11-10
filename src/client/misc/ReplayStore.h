@@ -13,9 +13,16 @@
 
 #include <chrono>
 #include <filesystem>
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+namespace SDK {
+    class Level;
+    class Actor;
+} // namespace SDK
 
 class ReplayStore final : public Listener {
 public:
@@ -47,6 +54,9 @@ public:
 
     [[nodiscard]] bool shouldListen() override;
 
+    /// True once (per occurrence) when recording had to be stopped because reading the game failed.
+    [[nodiscard]] bool consumeError() { return stoppedByError.exchange(false); }
+
     [[nodiscard]] static std::filesystem::path directory();
 
 private:
@@ -54,6 +64,8 @@ private:
     ReplayStore(ReplayStore const&) = delete;
 
     void onTick(class Event& ev);
+    void tickImpl(class Event& ev);
+    bool sampleEntities(SDK::Level* level, SDK::Actor* localPlayer, float px, float pz, ios::ReplayFrame& frame);
     void onLeave(class Event& ev);
     bool saveCurrent();
 
@@ -62,6 +74,10 @@ private:
         std::filesystem::path path;
     };
 
+    // game thread (ticks) and render thread (menu) both touch the recording
+    mutable std::recursive_mutex mutex;
+    std::atomic_bool stoppedByError { false };
+    bool entitiesFaulted = false;
     bool recording = false;
     std::chrono::steady_clock::time_point startTime;
     ios::ReplayClip current;

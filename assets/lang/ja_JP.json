@@ -40,6 +40,7 @@
     "client.ui.replay.cameraPath": "カメラパス",
     "client.ui.replay.cameraPathHint": "キーフレームを2つ以上追加すると有効にできます",
     "client.ui.replay.map": "マップ",
+    "client.ui.replay.error": "リプレイを停止しました: ゲームの読み取りに失敗しました(ログを確認してください)",
     "client.module.replay.recordTerrain.name": "マップを記録",
     "client.module.replay.recordTerrain.desc": "周囲の地形(真上から見た地図)も記録し、リプレイビューアに地図を表示します。",
     "client.module.replay.terrainRadius.name": "マップの範囲(チャンク)",

@@ -31,6 +31,7 @@ public:
     /// Chunks that contain at least one known column.
     [[nodiscard]] std::vector<ios::ReplayTerrainChunk> snapshot() const;
     [[nodiscard]] size_t chunkCount() const { return chunks.size(); }
+    [[nodiscard]] bool isDisabled() const { return disabled; }
 
 private:
     enum class Kind : uint8_t {
@@ -52,8 +53,11 @@ private:
 
     BlockInfo const& classify(SDK::BlockLegacy* legacy);
     bool sampleColumn(SDK::BlockSource* region, int x, int z, int yTop, int yBottom, uint8_t rgb[3], int16_t& height);
+    /// Same as sampleColumn but converts an access violation into "no data" and switches the sampler off.
+    bool sampleColumnGuarded(SDK::BlockSource* region, int x, int z, int yTop, int yBottom, uint8_t rgb[3], int16_t& height);
 
     std::unordered_map<int64_t, Build> chunks;
+    bool disabled = false; // set when reading the world faulted once
     std::unordered_map<const void*, BlockInfo> infoCache;
 };
 

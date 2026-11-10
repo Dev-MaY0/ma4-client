@@ -5,6 +5,9 @@
 #include "client/event/events/LeaveGameEvent.h"
 #include "client/event/events/TickEvent.h"
 #include "mc/common/world/actor/Actor.h"
+#include "mc/common/entity/component/ActorTypeComponent.h"
+#include "mc/common/entity/component/RuntimeIDComponent.h"
+#include "mc/common/world/Minecraft.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -103,12 +106,27 @@ std::filesystem::path ReplayStore::directory() {
     return util::GetMa4Path() / "Replays";
 }
 
+namespace {
+    // Runs fn(ctx) and turns an access violation into `false`. Kept free of objects with destructors so that
+    // __try is allowed here; everything that allocates lives in the callee.
+    bool runGuarded(void (*fn)(void*), void* ctx) {
+        __try {
+            fn(ctx);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+} // namespace
+
 float ReplayStore::recordingSeconds() const {
+    std::lock_guard lock(mutex);
     if (!recording) return 0.f;
     return std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime).count();
 }
 
 bool ReplayStore::startRecording() {
+    std::lock_guard lock(mutex);
     if (recording) return true;
     auto* ci = SDK::ClientInstance::get();
     if (!ci || !ci->getLocalPlayer()) return false;
@@ -117,11 +135,14 @@ bool ReplayStore::startRecording() {
     terrainRec.reset();
     current.frames.reserve(4096);
     startTime = std::chrono::steady_clock::now();
+    entitiesFaulted = false;
     recording = true;
+    Logger::Info("Replay: recording started (entities: {}, map: {})", config.recordEntities, config.recordTerrain);
     return true;
 }
 
 void ReplayStore::stopRecording(bool save) {
+    std::lock_guard lock(mutex);
     if (!recording) return;
     recording = false;
     if (save && current.frames.size() >= 2) {
@@ -147,6 +168,7 @@ void ReplayStore::toggleRecording() {
 }
 
 void ReplayStore::addMarker() {
+    std::lock_guard lock(mutex);
     if (!recording) return;
     auto* ci = SDK::ClientInstance::get();
     auto* lp = ci ? ci->getLocalPlayer() : nullptr;
@@ -168,10 +190,78 @@ void ReplayStore::onLeave(Event&) {
 void ReplayStore::onTick(Event& evG) {
     if (!recording) return;
 
-    auto& ev = reinterpret_cast<TickEvent&>(evG);
+    // The recorder only reads game memory. If a read ever faults, stop recording instead of taking the game down.
+    struct Ctx {
+        ReplayStore* self;
+        Event* ev;
+    } ctx { this, &evG };
+    bool ok = runGuarded(
+        [](void* p) {
+            auto* c = static_cast<Ctx*>(p);
+            c->self->tickImpl(*c->ev);
+        },
+        &ctx);
+    if (!ok) {
+        recording = false;
+        stoppedByError = true;
+        Logger::Warn("Replay: reading the game faulted while recording - the recording was stopped");
+    }
+}
+
+bool ReplayStore::sampleEntities(SDK::Level* level, SDK::Actor* lp, float px, float pz, ios::ReplayFrame& fr) {
+    struct Candidate {
+        float dist2;
+        SDK::Actor* actor;
+    };
+    std::vector<Candidate> nearby;
+    for (auto* actor : level->getRuntimeActorList()) {
+        if (!actor || actor == lp || !actor->stateVector) continue;
+        auto* type = actor->tryGetComponent<SDK::ActorTypeComponent>();
+        if (!type || type->type == kItemEntityType) continue;
+        auto p = actor->stateVector->pos;
+        float dx = p.x - px, dz = p.z - pz;
+        float d2 = dx * dx + dz * dz;
+        if (d2 > config.radius * config.radius) continue;
+        nearby.push_back({ d2, actor });
+    }
+    std::sort(nearby.begin(), nearby.end(), [](Candidate const& a, Candidate const& b) { return a.dist2 < b.dist2; });
+    if (nearby.size() > config.entityLimit) nearby.resize(config.entityLimit);
+
+    // the name tag function is signature based - only call it if the signature resolved
+    const bool canReadNames = Signatures::Actor_getNameTag.result != 0;
+
+    for (auto& c : nearby) {
+        auto* actor = c.actor;
+        auto* type = actor->tryGetComponent<SDK::ActorTypeComponent>();
+        auto* runtimeId = actor->tryGetComponent<SDK::RuntimeIDComponent>();
+        if (!type) continue;
+
+        ios::ReplayEntity e;
+        auto p = actor->stateVector->pos;
+        e.id = runtimeId ? static_cast<uint32_t>(runtimeId->runtimeID & 0xFFFFFFFFull) : 0u;
+        e.type = type->type;
+        e.player = type->type == 319;
+        e.x = p.x;
+        e.y = p.y;
+        e.z = p.z;
+        e.yaw = actor->actorRotation ? actor->actorRotation->rotation.y : 0.f;
+        if (e.player && canReadNames) {
+            std::wstring name = util::StrToWStr(actor->getNameTag());
+            if (name.size() > 24) name.resize(24);
+            e.name = std::move(name);
+        }
+        fr.entities.push_back(std::move(e));
+    }
+    return true;
+}
+
+void ReplayStore::tickImpl(Event&) {
+    std::lock_guard lock(mutex);
+    if (!recording) return;
+
     auto* ci = SDK::ClientInstance::get();
     auto* lp = ci ? ci->getLocalPlayer() : nullptr;
-    if (!lp) return;
+    if (!lp || !lp->stateVector || !lp->actorRotation) return;
 
     float t = recordingSeconds();
     if (t > config.maxMinutes * 60.f) {
@@ -181,56 +271,60 @@ void ReplayStore::onTick(Event& evG) {
 
     ios::ReplayFrame fr;
     fr.t = t;
-    auto pos = lp->getPos();
-    auto rot = lp->getRot();
+    Vec3 pos = lp->stateVector->pos;
+    Vec2 rot = lp->actorRotation->rotation;
     fr.px = pos.x;
     fr.py = pos.y;
     fr.pz = pos.z;
     fr.pitch = rot.x;
     fr.yaw = rot.y;
 
-    SDK::Level* level = ev.getLevel();
-    if (config.recordEntities && level) {
-        struct Candidate {
-            float dist2;
-            SDK::Actor* actor;
-        };
-        std::vector<Candidate> nearby;
-        for (auto* actor : level->getRuntimeActorList()) {
-            if (!actor || actor == lp) continue;
-            if (actor->getEntityTypeID() == kItemEntityType) continue;
-            auto p = actor->getPos();
-            float dx = p.x - pos.x, dz = p.z - pos.z;
-            float d2 = dx * dx + dz * dz;
-            if (d2 > config.radius * config.radius) continue;
-            nearby.push_back({ d2, actor });
-        }
-        std::sort(nearby.begin(), nearby.end(), [](Candidate const& a, Candidate const& b) { return a.dist2 < b.dist2; });
-        if (nearby.size() > config.entityLimit) nearby.resize(config.entityLimit);
+    // same way Hitboxes / WAILA get the level
+    SDK::Level* level = ci->minecraft ? ci->minecraft->getLevel() : nullptr;
 
-        for (auto& c : nearby) {
-            ios::ReplayEntity e;
-            auto p = c.actor->getPos();
-            e.id = static_cast<uint32_t>(c.actor->getRuntimeID() & 0xFFFFFFFFull);
-            e.type = c.actor->getEntityTypeID();
-            e.player = c.actor->isPlayer();
-            e.x = p.x;
-            e.y = p.y;
-            e.z = p.z;
-            e.yaw = c.actor->getRot().y;
-            if (e.player) {
-                std::wstring name = util::StrToWStr(c.actor->getNameTag());
-                if (name.size() > 24) name.resize(24);
-                e.name = std::move(name);
-            }
-            fr.entities.push_back(std::move(e));
+    if (config.recordEntities && level && !entitiesFaulted) {
+        struct Ctx {
+            ReplayStore* self;
+            SDK::Level* level;
+            SDK::Actor* lp;
+            float px, pz;
+            ios::ReplayFrame* frame;
+        } ctx { this, level, lp, pos.x, pos.z, &fr };
+        bool ok = runGuarded(
+            [](void* p) {
+                auto* c = static_cast<Ctx*>(p);
+                c->self->sampleEntities(c->level, c->lp, c->px, c->pz, *c->frame);
+            },
+            &ctx);
+        if (!ok) {
+            entitiesFaulted = true;
+            fr.entities.clear();
+            Logger::Warn("Replay: reading nearby entities faulted - entity recording is switched off for this recording");
         }
     }
 
-    if (config.recordTerrain) {
-        TerrainRecorder::Config tc;
-        tc.radiusChunks = config.terrainRadius;
-        terrainRec.update(ci->getRegion(), pos, tc);
+    if (config.recordTerrain && !terrainRec.isDisabled()) {
+        struct RegionCtx {
+            SDK::ClientInstance* ci;
+            SDK::BlockSource* region;
+        } rctx { ci, nullptr };
+        bool ok = runGuarded(
+            [](void* p) {
+                auto* c = static_cast<RegionCtx*>(p);
+                c->region = c->ci->getRegion();
+            },
+            &rctx);
+        if (ok && rctx.region) {
+            TerrainRecorder::Config tc;
+            tc.radiusChunks = config.terrainRadius;
+            terrainRec.update(rctx.region, pos, tc);
+            if (terrainRec.isDisabled()) {
+                Logger::Warn("Replay: reading blocks faulted - the map is switched off for this recording");
+            }
+        } else if (!ok) {
+            Logger::Warn("Replay: could not get the block source - the map is not recorded");
+            config.recordTerrain = false;
+        }
     }
 
     current.frames.push_back(std::move(fr));

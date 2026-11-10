@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -69,7 +69,7 @@ public:
     Ma4() = default;
     ~Ma4() = default;
 
-    static constexpr std::string_view version = "v1.0.1";
+    static constexpr std::string_view version = "v1.0.2";
     static constexpr std::array<std::string_view, 1> supportedMinecraftVersions = {
         "1.26.6x",
     };

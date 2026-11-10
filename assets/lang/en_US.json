@@ -40,6 +40,7 @@
         "client.ui.replay.cameraPath": "Camera Path",
         "client.ui.replay.cameraPathHint": "Add two or more keyframes to enable",
         "client.ui.replay.map": "Map",
+        "client.ui.replay.error": "Replay stopped: reading the game failed (see the log)",
         "client.module.replay.recordTerrain.name": "Record Map",
         "client.module.replay.recordTerrain.desc": "Also records the terrain around you (top-down map) so the replay viewer can show a map.",
         "client.module.replay.terrainRadius.name": "Map Radius (chunks)",
