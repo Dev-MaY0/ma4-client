@@ -1,0 +1,1 @@
+﻿target_precompile_headers(ma4 PRIVATE pch.h)

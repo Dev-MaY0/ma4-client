@@ -1,4 +1,6 @@
-# ma4 Client
+<p align="center"><img src="docs/icon.png" width="128" alt="ma4 icon"></p>
+
+# ma4 Client  <small>v1.0.1</small>
 
 **ma4 Client** is a DLL modification for Minecraft Bedrock Edition (Windows 10/11) with an iPhone / iOS styled
 interface, 30+ customizable modules, a HUD editor, a replay recorder and a JavaScript plugin system.
@@ -29,8 +31,9 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
 - **iOS style HUD.** HUD elements default to translucent rounded "widget" pills with a glass edge; the HUD editor,
   snap lines and notification banners use the same design language.
 - **Typography.** SF Pro is used automatically when it is installed, otherwise Segoe UI Variable / Segoe UI.
-- **Replay (beta).** A data recorder (your path, nearby players / mobs, markers) and a Replay page with a top-down
-  viewer: timeline scrubber with markers, play / pause, 0.5x - 4x speed, pan / zoom, and a keyframed camera path.
+- **Replay (beta).** A data recorder (your path, nearby players / mobs, markers, **terrain map**) and a Replay page
+  with a top-down viewer: map, timeline scrubber with markers, play / pause, 0.5x - 4x speed, pan / zoom, and a
+  keyframed camera path.
   See [Replay](#replay-beta) for what it does and does not do.
 
 ## Features
@@ -80,19 +83,31 @@ Inject the DLL into `Minecraft.Windows.exe` with the injector of your choice. Th
 ## Replay (beta)
 
 The recorder is a **read-only data recorder**: every game tick it stores your position / rotation and the players and
-mobs around you (up to 40 within 64 blocks) plus markers you drop. Recordings are written to
+mobs around you (up to 40 within 64 blocks) plus markers you drop. It also samples the **terrain map**: the top block of
+every column around you (colour + height, nearest chunks first, radius configurable in *Modules > Replay*), which the
+viewer draws as a top-down map with hill shading (toggle with the **Map** button). Recordings are written to
 `%AppData%\Roaming\ma4\Replays\*.ma4replay` when you stop (or when the maximum length is reached / you leave the
 world).
 
 - Start / stop from the **Replay** tab of the menu, or bind a key in *Modules > Replay*.
 - Drop markers with the button or the *Marker Key* while recording.
-- The viewer shows the recorded session as a top-down map (path, players, mobs, markers) with a scrubber, speed
+- The viewer shows the recorded session on the terrain map (path, players, mobs, markers) with a scrubber, speed
   control, pan / zoom and a keyframed camera path.
 
 It does **not** re-render the Minecraft world, so there is no free 3D camera inside the recorded world. That would
 require recording and re-creating chunks and entities inside the game's own renderer, which needs deep, game-version
 specific reverse engineering that cannot be validated here. Flarial's Replay Mod has no public documentation or source,
 so its exact behaviour was not reproduced.
+
+## Releasing (maintainers)
+
+`tools/publish.ps1` commits everything, tags the version and pushes to this repository:
+
+```powershell
+.\tools\publish.ps1 -Version 1.0.2 -Message "What changed"
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for the version history.
 
 ## Data folder
 
