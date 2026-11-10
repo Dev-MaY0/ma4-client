@@ -13,8 +13,8 @@ public:
     struct Activity {
         std::string details;
         std::string state;
-        std::string largeImageKey = "latite";
-        std::string largeImageText = "ma4 Client Logo";
+        std::string largeImageKey = "ma4";
+        std::string largeImageText = "Ma4 Client";
         std::string smallImageKey;
         std::string smallImageText;
         std::int64_t startTimestamp = 0;

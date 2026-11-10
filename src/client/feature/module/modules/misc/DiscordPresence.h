@@ -24,6 +24,10 @@ public:
     void onEnable() override;
     void onDisable() override;
 
+    /// Presence is on by default: enables it once (the first time this config sees the module), the user can
+    /// switch it off afterwards and that choice is kept.
+    void applyFirstRunDefault();
+
 private:
     struct ServerPresence {
         ServerDetection::ServerId server;
@@ -57,7 +61,9 @@ private:
         std::pair<std::string_view, std::string_view> { "BED", "BedWars" },
     };
 
-    const std::string discordApplicationId = "1066896173799047199";
+    // Discord application "Ma4": its name is what Discord shows as "Playing Ma4" (Rich Presence needs the public
+    // application id only - never a bot token). Art assets named "ma4" must be uploaded to that application.
+    const std::string discordApplicationId = "1569672619685453834";
     const std::chrono::seconds presenceCheckInterval { 5 };
     const std::chrono::seconds presenceRefreshInterval { 60 };
     const std::chrono::seconds hiveConnectionRefreshDelay { 3 };
@@ -70,6 +76,8 @@ private:
     void updateConnectionState();
     void publishPresence(bool force);
     DiscordIpcClient::Activity makeActivity() const;
+
+    ValueType firstRunDone = BoolValue(false); // hidden marker, saved with the config
 
     std::optional<DiscordIpcClient> ipcClient;
     std::optional<DiscordIpcClient::Activity> lastSentActivity;

@@ -114,13 +114,28 @@ See [CHANGELOG.md](CHANGELOG.md) for the version history.
 `%AppData%\Roaming\ma4` contains `Configs`, `Plugins`, `Logs`, `Replays`, `Assets` (ChakraCore for plugins). Delete the
 folder to reset ma4 completely.
 
+## Discord Presence
+
+With the *Discord Presence* module (on by default) Discord shows **"Playing Ma4"** while the client is running, plus
+whether you are in the menus, in singleplayer or on a server. It uses Rich Presence over Discord's local IPC, so the
+Discord desktop app must be running; no bot token is involved - only the public *Application ID*
+(`discordApplicationId` in `src/client/feature/module/modules/misc/DiscordPresence.h`).
+
+Two things have to be set once in the [Discord Developer Portal](https://discord.com/developers/applications) for that
+application:
+
+1. **General Information > Name** must be `Ma4` - Discord shows exactly this name after "Playing".
+2. **Rich Presence > Art Assets**: upload [`docs/discord/ma4.png`](docs/discord/ma4.png) with the asset name `ma4`
+   (it can take a few minutes until Discord serves a new asset). Without it the status still works, just without the
+   image.
+
+If you use a different application, replace the id in `DiscordPresence.h`.
+
 ## Notes about external services
 
 ma4 is a rename of Latite, so a few URLs still point to the upstream project because those files are hosted there:
-the ChakraCore download, the plugin registry / hashes and the Discord application used by *Discord Presence* (which
-therefore still shows the upstream application name and artwork). Replace them in `src/client/Ma4.cpp`,
-`src/client/script/PluginManager.cpp`, `src/client/script/JsPlugin.cpp` and
-`src/client/feature/module/modules/misc/DiscordPresence.h` (`discordApplicationId`) if you host your own.
+the ChakraCore download and the plugin registry / hashes. Replace them in `src/client/Ma4.cpp`,
+`src/client/script/PluginManager.cpp` and `src/client/script/JsPlugin.cpp` if you host your own.
 
 ## License
 

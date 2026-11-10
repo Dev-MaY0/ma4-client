@@ -50,6 +50,7 @@
 #include "render/asset/Assets.h"
 #include "resource/Resource.h"
 #include "feature/module/modules/game/Freelook.h"
+#include "feature/module/modules/misc/DiscordPresence.h"
 #include "util/GameAllocator.h"
 
 using namespace std;
@@ -581,6 +582,9 @@ void Ma4::threadsafeInit() {
     Logger::Info("Loaded startup scripts");
 
     Ma4::getConfigManager().applyModuleConfig();
+    if (auto presence = Ma4::getModuleManager().find("DiscordPresence")) {
+        std::static_pointer_cast<DiscordPresence>(presence)->applyFirstRunDefault();
+    }
 
     Ma4::getRenderer().setShouldInit();
 

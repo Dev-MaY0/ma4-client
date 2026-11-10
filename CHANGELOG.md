@@ -3,6 +3,18 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.0.4] - 2026-11-10
+
+### Added
+- **Discord shows "Playing Ma4".** Discord Presence now uses the Ma4 Discord application
+  (id `1569672619685453834`) instead of Latite's, and it is **on by default**: the first time a config sees the module
+  it is switched on once (turn it off in the menu and that stays off). The presence uses the "ma4" art asset only
+  (see README > Discord Presence). `docs/discord/ma4.png` is the 1024px icon to upload.
+
+### Changed
+- Presence images no longer reference Latite's art keys (server logos, "minecraft", "latite"); the large image is the
+  `ma4` asset with the text "Ma4 Client v<version>".
+
 ## [1.0.3] - 2026-11-10
 
 ### Changed

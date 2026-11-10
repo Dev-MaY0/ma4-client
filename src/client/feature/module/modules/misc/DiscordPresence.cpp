@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "DiscordPresence.h"
 
+#include "client/Ma4.h"
 #include "client/event/events/ClientTextEvent.h"
 #include "client/event/events/PacketReceiveEvent.h"
 #include "client/event/events/SendPacketEvent.h"
@@ -14,6 +15,9 @@
 DiscordPresence::DiscordPresence()
     : Module("DiscordPresence", LocalizeString::get("client.module.discordPresence.name"),
              LocalizeString::get("client.module.discordPresence.desc"), GAME) {
+    auto marker = addSetting("firstRunDone", L"firstRunDone", L"<internal setting>", firstRunDone);
+    marker->visible = false;
+
     Eventing::get().listen<UpdateEvent, &DiscordPresence::onUpdate>(this);
     Eventing::get().listen<PacketReceiveEvent, &DiscordPresence::onPacketReceive>(this);
     Eventing::get().listen<ClientTextEvent, &DiscordPresence::onClientText>(this, 10);
@@ -22,6 +26,12 @@ DiscordPresence::DiscordPresence()
 
 DiscordPresence::~DiscordPresence() {
     onDisable();
+}
+
+void DiscordPresence::applyFirstRunDefault() {
+    if (std::get<BoolValue>(firstRunDone).value) return;
+    firstRunDone = BoolValue(true);
+    if (!isEnabled()) setEnabled(true);
 }
 
 void DiscordPresence::onEnable() {
@@ -234,6 +244,8 @@ void DiscordPresence::publishPresence(bool force) {
 
 DiscordIpcClient::Activity DiscordPresence::makeActivity() const {
     DiscordIpcClient::Activity activity;
+    activity.largeImageKey = "ma4";
+    activity.largeImageText = std::format("Ma4 Client {}", Ma4::version);
     activity.startTimestamp =
         sessionStart > 0 ? sessionStart : std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
@@ -274,10 +286,6 @@ DiscordIpcClient::Activity DiscordPresence::makeActivity() const {
         }
 
         activity.state = std::string(activeServer->name);
-        activity.largeImageKey = std::string(activeServer->logoKey);
-        activity.largeImageText = std::string(activeServer->logoTooltip);
-        activity.smallImageKey = "latite";
-        activity.smallImageText = "ma4 Client Logo";
         return activity;
     }
 
@@ -296,9 +304,5 @@ DiscordIpcClient::Activity DiscordPresence::makeActivity() const {
         }
     }
 
-    activity.largeImageKey = "minecraft";
-    activity.largeImageText = "Minecraft Bedrock Logo";
-    activity.smallImageKey = "latite";
-    activity.smallImageText = "ma4 Client Logo";
     return activity;
 }
