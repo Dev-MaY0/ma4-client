@@ -29,7 +29,7 @@ namespace ios {
         const float cardH = rowH + (rp.recording ? S(kRowH) : 0.f);
         Rect card(x, y, x + w, y + cardH);
         drawCard(ui, card);
-        ui.pushClipRRect(card, S(kGroupR));
+        ui.beginCard(card, S(kGroupR));
 
         Rect tile(card.left + S(16.f), card.top + rowH * 0.5f - S(24.f), card.left + S(16.f) + S(48.f),
                   card.top + rowH * 0.5f + S(24.f));
@@ -90,7 +90,7 @@ namespace ios {
             ui.hairlineH(mr.left + S(16.f), mr.right, mr.top, pal.separator);
             uint64_t id = Ui::hashId("rec.marker");
             auto cr = ui.click(id, mr, interactive);
-            if (cr.pressed) ui.fillRect(mr, pal.cellPressed);
+            if (cr.pressed) ui.fillCell(mr, pal.cellPressed);
             float tw = ui.textWidth(f.str.addMarker, TextStyle(Font::Regular, S(17.f), pal.accent));
             float cx = mr.centerX();
             ui.glyph(Glyph::Flag,
@@ -100,7 +100,7 @@ namespace ios {
                     TextStyle(Font::Regular, S(17.f), pal.accent, HAlign::Leading, VAlign::Center));
             if (cr.clicked && rp.addMarker) rp.addMarker();
         }
-        ui.popClipRRect();
+        ui.endCard();
         y = card.bottom + S(26.f);
 
         // ---- recordings
@@ -122,13 +122,13 @@ namespace ios {
         const float lrh = S(64.f);
         Rect list(x, y, x + w, y + lrh * static_cast<float>(rp.list.size()));
         drawCard(ui, list);
-        ui.pushClipRRect(list, S(kGroupR));
+        ui.beginCard(list, S(kGroupR));
         for (size_t i = 0; i < rp.list.size(); ++i) {
             auto& e = rp.list[i];
             Rect rc(x, y + lrh * static_cast<float>(i), x + w, y + lrh * static_cast<float>(i + 1));
             if (rc.bottom < view.top - S(2.f) || rc.top > view.bottom + S(2.f)) continue;
             auto cr = ui.click(e.id ^ 0x4E71ull, rc, interactive);
-            if (cr.pressed) ui.fillRect(rc, pal.cellPressed);
+            if (cr.pressed) ui.fillCell(rc, pal.cellPressed);
             Rect t(rc.left + S(14.f), rc.centerY() - S(19.f), rc.left + S(14.f) + S(38.f), rc.centerY() + S(19.f));
             ui.iconTile(t, pal.indigo, Glyph::Play);
             float th = S(22.f), sh = S(17.f);
@@ -146,7 +146,7 @@ namespace ios {
             }
             if (cr.clicked) pushReplay(e.id);
         }
-        ui.popClipRRect();
+        ui.endCard();
         return list.bottom + S(24.f);
     }
 

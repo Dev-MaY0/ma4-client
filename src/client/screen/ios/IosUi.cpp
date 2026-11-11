@@ -1,5 +1,7 @@
 #include "IosUi.h"
 
+#include <cstring>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -214,6 +216,24 @@ namespace ios {
         mirrorStack_.clear();
         scaleStack_.clear();
         mirrorDepth = 0;
+        layerFlags_.clear();
+        stats = Stats {};
+
+        // cached layouts / brushes belong to the fonts and the device context they were created with
+        bool fontsChanged = false;
+        for (int i = 0; i < static_cast<int>(Font::Count); ++i) {
+            if (fontSig_[i] != gfx.fonts[i]) {
+                fontSig_[i] = gfx.fonts[i];
+                fontsChanged = true;
+            }
+        }
+        if (fontsChanged) textCache_.clear();
+        if (ctxSig_ != gfx.ctx) {
+            ctxSig_ = gfx.ctx;
+            gradCache_.clear();
+            backdropBrush_.Reset();
+            backdropBmp_ = nullptr;
+        }
         ensureFactoryResources();
 
         // A widget that stopped being drawn must not keep the pointer captured forever.
@@ -234,9 +254,30 @@ namespace ios {
             }
         }
         while (mirrorDepth > 0) popMirror();
+
+        // drop cache entries that were not used for ~3 seconds (and keep both caches bounded)
+        if ((frame_ & 63u) == 0) {
+            const uint64_t keep = frame_ > 180 ? frame_ - 180 : 0;
+            for (auto it = textCache_.begin(); it != textCache_.end();) {
+                it = it->second.lastFrame < keep ? textCache_.erase(it) : std::next(it);
+            }
+            for (auto it = gradCache_.begin(); it != gradCache_.end();) {
+                it = it->second.lastFrame < keep ? gradCache_.erase(it) : std::next(it);
+            }
+        }
+        if (textCache_.size() > 3000) textCache_.clear();
+        if (gradCache_.size() > 1500) gradCache_.clear();
     }
 
     void Ui::releaseDeviceResources() {
+        backdropBrush_.Reset();
+        backdropBmp_ = nullptr;
+        ctxSig_ = nullptr;
+        for (auto& f : fontSig_) f = nullptr;
+        textCache_.clear();
+        gradCache_.clear();
+        layerFlags_.clear();
+        releaseGlassPlateCache();
         smoothCache_.clear();
         roundStroke_.Reset();
         cachedFactory_ = nullptr;
@@ -356,6 +397,7 @@ namespace ios {
 
     ComPtr<ID2D1PathGeometry> Ui::buildSmoothPath(float x, float y, float w, float h, float R) {
         ComPtr<ID2D1PathGeometry> geo;
+        ++stats.geometries;
         if (!g.d2d || FAILED(g.d2d->CreatePathGeometry(geo.GetAddressOf()))) return {};
         ComPtr<ID2D1GeometrySink> sink;
         if (FAILED(geo->Open(sink.GetAddressOf()))) return {};
@@ -501,6 +543,44 @@ namespace ios {
         g.ctx->SetTransform(old);
     }
 
+    void Ui::fillClipped(Rect const& r, Rect const& card, float cardRadius, Col c) {
+        if (c.a <= 0.001f || !g.d2d || r.getWidth() <= 0.f || r.getHeight() <= 0.f) return;
+        const float w = card.getWidth(), h = card.getHeight();
+        cardRadius = std::min(cardRadius, std::min(w, h) * 0.5f);
+        // rows that do not touch a corner need no clipping at all
+        const bool touchesTop = r.top < card.top + cardRadius;
+        const bool touchesBottom = r.bottom > card.bottom - cardRadius;
+        if (!touchesTop && !touchesBottom) {
+            fillRect(r, c);
+            return;
+        }
+        ComPtr<ID2D1Geometry> cardGeo = smoothGeometry(w, h, cardRadius, true, card.left, card.top);
+        ComPtr<ID2D1RectangleGeometry> rectGeo;
+        ComPtr<ID2D1PathGeometry> out;
+        ComPtr<ID2D1GeometrySink> sink;
+        if (!cardGeo || FAILED(g.d2d->CreateRectangleGeometry(r.get(), rectGeo.GetAddressOf())) ||
+            FAILED(g.d2d->CreatePathGeometry(out.GetAddressOf())) || FAILED(out->Open(sink.GetAddressOf()))) {
+            fillRect(r, c);
+            return;
+        }
+        ++stats.geometries;
+        if (FAILED(rectGeo->CombineWithGeometry(cardGeo.Get(), D2D1_COMBINE_MODE_INTERSECT, nullptr, sink.Get()))) {
+            fillRect(r, c);
+            return;
+        }
+        sink->Close();
+        setColor(c);
+        g.ctx->FillGeometry(out.Get(), g.brush);
+    }
+
+    void Ui::fillCell(Rect const& r, Col c) {
+        if (hasCard_) {
+            fillClipped(r, cardRect_, cardRadius_, c);
+        } else {
+            fillRect(r, c);
+        }
+    }
+
     void Ui::rrect(Rect const& r, float radius, Col c) {
         fillSmooth(r, radius, c);
     }
@@ -510,17 +590,15 @@ namespace ios {
     }
 
     void Ui::rrectGradient(Rect const& r, float radius, Col top, Col bottom) {
-        D2D1_GRADIENT_STOP stops[2] = { { 0.f, top.get() }, { 1.f, bottom.get() } };
-        ComPtr<ID2D1GradientStopCollection> coll;
-        if (FAILED(g.ctx->CreateGradientStopCollection(stops, 2, coll.GetAddressOf()))) return;
-        ComPtr<ID2D1LinearGradientBrush> brush;
-        if (FAILED(g.ctx->CreateLinearGradientBrush(
-                D2D1::LinearGradientBrushProperties(pt(r.left, r.top), pt(r.left, r.bottom)), coll.Get(),
-                brush.GetAddressOf()))) {
-            return;
-        }
+        auto brush = linearBrush({ r.left, r.top }, { r.left, r.bottom },
+                                 { D2D1_GRADIENT_STOP { 0.f, top.get() }, D2D1_GRADIENT_STOP { 1.f, bottom.get() } });
+        if (!brush) return;
         radius = std::min(radius, std::min(r.getWidth(), r.getHeight()) * 0.5f);
-        g.ctx->FillRoundedRectangle(D2D1::RoundedRect(r.get(), radius, radius), brush.Get());
+        if (radius < 0.5f) {
+            g.ctx->FillRectangle(r.get(), brush.Get());
+        } else {
+            g.ctx->FillRoundedRectangle(D2D1::RoundedRect(r.get(), radius, radius), brush.Get());
+        }
     }
 
     void Ui::circle(Vec2 center, float radius, Col c) {
@@ -560,7 +638,11 @@ namespace ios {
             float falloff = (1.f - t);
             float a = c.a * (0.55f / static_cast<float>(n)) * (0.35f + 2.2f * falloff * falloff);
             Rect rr(r.left - grow, r.top - grow + dy, r.right + grow, r.bottom + grow + dy);
-            fillSmooth(rr, radius + grow, c.asAlpha(std::min(a, 0.35f)));
+            // a blurred shadow does not show the squircle corner, so the analytic rounded rectangle primitive is
+            // used: it is drawn by a shader instead of being tessellated on the CPU every frame
+            setColor(c.asAlpha(std::min(a, 0.35f)));
+            const float rad = std::min(radius + grow, std::min(rr.getWidth(), rr.getHeight()) * 0.5f);
+            g.ctx->FillRoundedRectangle(D2D1::RoundedRect(rr.get(), rad, rad), g.brush);
         }
     }
 
@@ -598,8 +680,9 @@ namespace ios {
             geo = smoothGeometry(w, h, radius, true, r.left, r.top);
         }
 
-        D2D1_LAYER_PARAMETERS1 lp =
-            D2D1::LayerParameters1(D2D1::InfiniteRect(), geo.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        // tight content bounds: with an infinite rectangle Direct2D allocates and composites a render-target sized layer
+        D2D1_LAYER_PARAMETERS1 lp = D2D1::LayerParameters1(r.get(), geo.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        ++stats.layers;
         g.ctx->PushLayer(&lp, nullptr);
 
         Rect cur = hitClips_.back();
@@ -615,15 +698,24 @@ namespace ios {
         clipKinds_.pop_back();
     }
 
-    void Ui::pushOpacity(Rect const&, float opacity) {
-        D2D1_LAYER_PARAMETERS1 lp = D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr,
-                                                           D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(),
-                                                           std::clamp(opacity, 0.f, 1.f));
+    void Ui::pushOpacity(Rect const& bounds, float opacity) {
+        // a fully opaque layer changes nothing: skip it (a full-window layer costs a render-target sized pass)
+        if (opacity >= 0.999f) {
+            layerFlags_.push_back(0);
+            return;
+        }
+        D2D1_LAYER_PARAMETERS1 lp = D2D1::LayerParameters1(bounds.get(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                           D2D1::IdentityMatrix(), std::clamp(opacity, 0.f, 1.f));
+        ++stats.layers;
         g.ctx->PushLayer(&lp, nullptr);
+        layerFlags_.push_back(1);
     }
 
     void Ui::popOpacity() {
-        g.ctx->PopLayer();
+        if (layerFlags_.empty()) return;
+        const bool real = layerFlags_.back() != 0;
+        layerFlags_.pop_back();
+        if (real) g.ctx->PopLayer();
     }
 
     // ======================================================================================== text
@@ -639,9 +731,42 @@ namespace ios {
         }
         if (!fmt || !g.dwrite) return {};
 
+        // boxes are quantised to a quarter pixel: an animated rectangle would otherwise miss the cache every frame
+        const float qw = std::max(1.f, std::round(w * 4.f) * 0.25f);
+        const float qh = std::max(1.f, std::round(h * 4.f) * 0.25f);
+        const uint32_t flags = (st.wrap ? 1u : 0u) | (st.ellipsis ? 2u : 0u) | (rtl ? 4u : 0u) |
+                               (static_cast<uint32_t>(st.h) << 3) | (static_cast<uint32_t>(st.v) << 5);
+
+        uint64_t key = 1469598103934665603ull;
+        auto mixIn = [&key](uint64_t v) {
+            key ^= v + 0x9E3779B97F4A7C15ull + (key << 6) + (key >> 2);
+            key *= 1099511628211ull;
+        };
+        for (wchar_t ch : s) mixIn(static_cast<uint64_t>(ch));
+        mixIn(reinterpret_cast<uintptr_t>(fmt));
+        uint32_t bits;
+        std::memcpy(&bits, &st.size, 4);
+        mixIn(bits);
+        std::memcpy(&bits, &qw, 4);
+        mixIn(bits);
+        std::memcpy(&bits, &qh, 4);
+        mixIn(bits);
+        mixIn(flags);
+
+        auto it = textCache_.find(key);
+        if (it != textCache_.end()) {
+            TextEntry& e = it->second;
+            if (e.layout && e.fmt == fmt && e.size == st.size && e.w == qw && e.h == qh && e.flags == flags && e.s == s) {
+                e.lastFrame = frame_;
+                ++stats.layoutHits;
+                return e.layout;
+            }
+        }
+
         ComPtr<IDWriteTextLayout> layout;
-        if (FAILED(g.dwrite->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), fmt, std::max(1.f, w),
-                                              std::max(1.f, h), layout.GetAddressOf()))) {
+        ++stats.layouts;
+        if (FAILED(g.dwrite->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), fmt, qw, qh,
+                                              layout.GetAddressOf()))) {
             return {};
         }
         DWRITE_TEXT_RANGE range { 0, static_cast<UINT32>(s.size()) };
@@ -649,6 +774,12 @@ namespace ios {
         layout->SetWordWrapping(st.wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
         layout->SetReadingDirection(rtl ? DWRITE_READING_DIRECTION_RIGHT_TO_LEFT : DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
         layout->SetFlowDirection(DWRITE_FLOW_DIRECTION_TOP_TO_BOTTOM);
+        layout->SetTextAlignment(st.h == HAlign::Leading  ? DWRITE_TEXT_ALIGNMENT_LEADING
+                                 : st.h == HAlign::Center ? DWRITE_TEXT_ALIGNMENT_CENTER
+                                                          : DWRITE_TEXT_ALIGNMENT_TRAILING);
+        layout->SetParagraphAlignment(st.v == VAlign::Top      ? DWRITE_PARAGRAPH_ALIGNMENT_NEAR
+                                      : st.v == VAlign::Center ? DWRITE_PARAGRAPH_ALIGNMENT_CENTER
+                                                               : DWRITE_PARAGRAPH_ALIGNMENT_FAR);
         if (!st.wrap && st.ellipsis) {
             ComPtr<IDWriteInlineObject> sign;
             if (SUCCEEDED(g.dwrite->CreateEllipsisTrimmingSign(layout.Get(), sign.GetAddressOf()))) {
@@ -656,23 +787,36 @@ namespace ios {
                 layout->SetTrimming(&trimming, sign.Get());
             }
         }
+
+        TextEntry& e = textCache_[key];
+        e.s = s;
+        e.fmt = fmt;
+        e.size = st.size;
+        e.w = qw;
+        e.h = qh;
+        e.flags = flags;
+        e.layout = layout;
+        e.lastFrame = frame_;
         return layout;
     }
 
     void Ui::text(Rect const& r, std::wstring const& s, TextStyle const& st) {
         if (s.empty() || st.color.a <= 0.001f) return;
+        setColor(st.color);
+        drawText(r, s, st, g.brush);
+    }
+
+    void Ui::textBrush(Rect const& r, std::wstring const& s, TextStyle const& st, ID2D1Brush* brush) {
+        if (s.empty() || !brush) return;
+        drawText(r, s, st, brush);
+    }
+
+    void Ui::drawText(Rect const& r, std::wstring const& s, TextStyle const& st, ID2D1Brush* brush) {
         float w = r.getWidth(), h = r.getHeight();
         if (w <= 1.f || h <= 1.f) return;
 
         auto layout = makeLayout(s, st, w, h);
         if (!layout) return;
-
-        layout->SetTextAlignment(st.h == HAlign::Leading  ? DWRITE_TEXT_ALIGNMENT_LEADING
-                                 : st.h == HAlign::Center ? DWRITE_TEXT_ALIGNMENT_CENTER
-                                                          : DWRITE_TEXT_ALIGNMENT_TRAILING);
-        layout->SetParagraphAlignment(st.v == VAlign::Top      ? DWRITE_PARAGRAPH_ALIGNMENT_NEAR
-                                      : st.v == VAlign::Center ? DWRITE_PARAGRAPH_ALIGNMENT_CENTER
-                                                               : DWRITE_PARAGRAPH_ALIGNMENT_FAR);
 
         D2D1::Matrix3x2F old;
         const bool flip = mirrored();
@@ -681,8 +825,7 @@ namespace ios {
             g.ctx->SetTransform(D2D1::Matrix3x2F::Scale(-1.f, 1.f, D2D1::Point2F(r.centerX(), 0.f)) *
                                 D2D1::Matrix3x2F(old));
         }
-        setColor(st.color);
-        g.ctx->DrawTextLayout(pt(r.left, r.top), layout.Get(), g.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        g.ctx->DrawTextLayout(pt(r.left, r.top), layout.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (flip) g.ctx->SetTransform(old);
     }
 
@@ -760,6 +903,9 @@ namespace ios {
         case Glyph::Plus:
             L(-0.32f, 0.f, 0.32f, 0.f, t);
             L(0.f, -0.32f, 0.f, 0.32f, t);
+            break;
+        case Glyph::Minus:
+            L(-0.30f, 0.f, 0.30f, 0.f, t);
             break;
         case Glyph::Magnifier: {
             circleStroke({ cx - 0.07f * sz, cy - 0.07f * sz }, 0.27f * sz, c, t);
@@ -907,14 +1053,19 @@ namespace ios {
         }
     }
 
+    // subtle top sheen like the Settings app tiles: one gradient fill in the tile's own shape (no clip layer)
+    void Ui::tileSheen(Rect const& r, float rad) {
+        auto br = linearBrush({ r.left, r.top }, { r.left, r.bottom },
+                              { D2D1_GRADIENT_STOP { 0.f, Col(1.f, 1.f, 1.f, 0.16f).get() },
+                                D2D1_GRADIENT_STOP { 0.55f, Col(1.f, 1.f, 1.f, 0.f).get() },
+                                D2D1_GRADIENT_STOP { 1.f, Col(1.f, 1.f, 1.f, 0.f).get() } });
+        fillBrush(r, rad, br.Get());
+    }
+
     void Ui::iconTile(Rect const& r, Col base, std::wstring const& monogram) {
         float rad = r.getWidth() * 0.2237f;
         fillSmooth(r, rad, base);
-        // subtle top sheen like the Settings app tiles
-        pushClipRRect(r, rad);
-        rrectGradient(Rect(r.left, r.top, r.right, r.top + r.getHeight() * 0.55f), 0.f, Col(1.f, 1.f, 1.f, 0.16f),
-                      Col(1.f, 1.f, 1.f, 0.f));
-        popClipRRect();
+        tileSheen(r, rad);
         TextStyle st(Font::Semibold, r.getHeight() * 0.52f, Col(1.f, 1.f, 1.f, 1.f), HAlign::Center, VAlign::Center);
         st.ellipsis = false;
         text(r, monogram, st);
@@ -923,10 +1074,7 @@ namespace ios {
     void Ui::iconTile(Rect const& r, Col base, Glyph gl) {
         float rad = r.getWidth() * 0.2237f;
         fillSmooth(r, rad, base);
-        pushClipRRect(r, rad);
-        rrectGradient(Rect(r.left, r.top, r.right, r.top + r.getHeight() * 0.55f), 0.f, Col(1.f, 1.f, 1.f, 0.16f),
-                      Col(1.f, 1.f, 1.f, 0.f));
-        popClipRRect();
+        tileSheen(r, rad);
         glyph(gl, inset(r, r.getWidth() * 0.18f, r.getHeight() * 0.18f), Col(1.f, 1.f, 1.f, 1.f), 1.05f, base);
     }
 

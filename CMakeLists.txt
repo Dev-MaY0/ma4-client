@@ -200,3 +200,49 @@ target_link_libraries(ma4 PRIVATE
 
 add_subdirectory(src)
 add_subdirectory(deps)
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Ma4Launcher.exe: the lock-screen style launcher (clock, "Ma4" title, wallpaper) that starts Minecraft and loads
+# ma4.dll. It lives outside src/ because everything under src/ is compiled into the DLL; it reuses the game independent
+# Direct2D toolkit of the menu (the two ios/ sources below). It is written next to ma4.dll.
+#
+# The icon / logo resources are compiled with rc.exe by hand: CMake's own RC support for Ninja needs cmcldeps.exe,
+# which the MSYS2 build of CMake does not ship.
+# the launcher shows the same version as the DLL: read it from Ma4.h
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/src/client/Ma4.h" MA4_VERSION_LINE REGEX "version = \"v[0-9]+\\.[0-9]+\\.[0-9]+\"")
+string(REGEX MATCH "v[0-9]+\\.[0-9]+\\.[0-9]+" MA4_VERSION_TEXT "${MA4_VERSION_LINE}")
+if (NOT MA4_VERSION_TEXT)
+    set(MA4_VERSION_TEXT "v0.0.0")
+endif ()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/client/Ma4.h")
+
+find_program(MA4_RC_EXE NAMES rc.exe REQUIRED)
+set(MA4_LAUNCHER_RES "${PROJECT_BINARY_DIR}/ma4_launcher.res")
+add_custom_command(
+        OUTPUT "${MA4_LAUNCHER_RES}"
+        COMMAND "${MA4_RC_EXE}" /nologo /fo "${MA4_LAUNCHER_RES}" ma4_launcher.rc
+        DEPENDS launcher/ma4_launcher.rc launcher/LauncherResource.h launcher/ma4.ico assets/logo.png
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/launcher"
+        COMMENT "Compiling launcher resources"
+        VERBATIM
+)
+set_source_files_properties("${MA4_LAUNCHER_RES}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+
+add_executable(ma4_launcher WIN32
+        launcher/Launcher.cpp
+        launcher/Injector.cpp
+        launcher/Wallpaper.cpp
+        src/client/screen/ios/IosUi.cpp
+        src/client/screen/ios/IosGlass.cpp
+        "${MA4_LAUNCHER_RES}"
+)
+set_target_properties(ma4_launcher PROPERTIES OUTPUT_NAME "Ma4Launcher")
+set_property(TARGET ma4_launcher PROPERTY CXX_STANDARD 23)
+set_property(TARGET ma4_launcher PROPERTY CXX_STANDARD_REQUIRED ON)
+target_compile_definitions(ma4_launcher PRIVATE _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN "MA4_VERSION_TEXT=\"${MA4_VERSION_TEXT}\"")
+target_compile_options(ma4_launcher PRIVATE /EHsc /W4)
+target_include_directories(ma4_launcher PRIVATE src launcher)
+target_link_libraries(ma4_launcher PRIVATE
+        d3d11 dxgi dxguid d2d1 dwrite windowscodecs
+        ole32 oleaut32 uuid user32 gdi32 shell32 shlwapi advapi32 dwmapi
+)

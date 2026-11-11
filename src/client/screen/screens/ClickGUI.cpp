@@ -217,7 +217,43 @@ ios::Strings ClickGUI::makeStrings() {
     return s;
 }
 
+ClickGUI::~ClickGUI() {
+    if (marketThread.joinable()) marketThread.join();
+}
+
+void ClickGUI::startMarketFetch() {
+    marketRequested = true;
+    auto state = std::make_shared<MarketFetch>();
+    marketFetch = state;
+    marketThread = std::thread([state] {
+        std::vector<MarketInfo> out;
+        try {
+            for (auto& plug : Ma4::getPluginManager().fetchPluginsFromMarket(false)) {
+                out.push_back({ plug.id, plug.name, plug.author, plug.desc });
+            }
+        } catch (...) {
+        }
+        state->result = std::move(out);
+        state->done.store(true, std::memory_order_release);
+    });
+}
+
 void ClickGUI::rebuildMarketIfNeeded() {
+    // Never block the render thread on the network: download in the background and pick the result up here.
+    if (marketFetch && marketFetch->done.load(std::memory_order_acquire)) {
+        if (marketThread.joinable()) marketThread.join();
+        marketInfo = std::move(marketFetch->result);
+        marketFetch.reset();
+        // an empty list means the registry was unreachable: try again in a while, not every frame
+        marketNextTry = marketInfo.empty() ? std::chrono::steady_clock::now() + std::chrono::seconds(120)
+                                           : std::chrono::steady_clock::time_point::max();
+        shouldRebuildMarket = true;
+    }
+    if (!marketFetch && !marketThread.joinable() &&
+        (!marketRequested || (marketInfo.empty() && std::chrono::steady_clock::now() >= marketNextTry))) {
+        startMarketFetch();
+    }
+
     size_t count = Ma4::getModuleManager().size();
     if (!marketBuilt || shouldRebuildMarket || count != lastModuleCount) {
         shouldRebuildMarket = false;
@@ -225,7 +261,8 @@ void ClickGUI::rebuildMarketIfNeeded() {
         lastModuleCount = count;
         market.clear();
 
-        for (auto& plug : Ma4::getPluginManager().fetchPluginsFromMarket()) {
+        // only the "installed" state is looked up again here (a local file check), never the registry
+        for (auto& plug : marketInfo) {
             MarketEntry e;
             e.id = plug.id;
             e.name = plug.name;

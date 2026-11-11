@@ -37,8 +37,17 @@ CMake caches absolute paths: if this folder is moved / renamed, delete `out/` fi
   renderer / settings. HUD plates use `feature/module/GlassPlate.h` (works with a bare device context).
 - `src/client/screen/screens/ClickGUI.*` - adapter between modules / settings / plugins and the shell.
 - `src/client/misc/ReplayStore.*`, `ReplayTerrain.*` - replay recorder, `.ma4replay` files, terrain map sampler.
+- `launcher/` - `Ma4Launcher.exe` (lock-screen style launcher: clock, "Ma4" title, wallpaper, Play). It must stay
+  **outside `src/`** (everything in `src/` is compiled into the DLL). It compiles `IosUi.cpp` + `IosGlass.cpp` for its
+  controls, reads the version from `src/client/Ma4.h` (CMake), and its resources (icon, logo) are compiled by a custom
+  `rc.exe` command because the MSYS2 CMake has no `cmcldeps` for Ninja + RC. `Ma4Launcher.exe --render out.png` draws
+  a frame without a window (use it to check the launcher visually).
 - `tools/ui-harness/` - renders every screen to PNG without Minecraft (`build.bat`, then `out\harness.exe <dir>`).
-  Use it to check UI changes visually; it links the same sources as the DLL.
+  Use it to check UI changes visually; it links the same sources as the DLL. `out\harness.exe --bench [W H]` prints
+  the frame cost and the layers / layouts / gradients per frame: run it after touching the UI toolkit.
 - Source files must stay ASCII or have a BOM (MSVC reads BOM-less files as the system code page): use `\uXXXX` escapes
   for non-ASCII characters in string literals.
+- UI performance rules (the menu is drawn on the game's render thread every frame): no clip layer per row (use
+  `Ui::beginCard` / `fillCell`), no network or disk work in `ClickGUI::onRender` (the plugin registry is fetched on a
+  thread), create gradient brushes through `Ui::linearBrush` (cached) and text through `Ui::text` (layouts cached).
 - Game hooks / signatures (`src/mc`, `src/client/memory`) are version specific and cannot be verified without the game.

@@ -270,13 +270,17 @@ std::expected<void, std::string> PluginManager::installScript(std::string const&
     return std::unexpected("Could not find script " + inName);
 }
 
-std::vector<PluginManager::PluginInfo> PluginManager::fetchPluginsFromMarket() {
+std::vector<PluginManager::PluginInfo> PluginManager::fetchPluginsFromMarket(bool reportErrors) {
     std::vector<PluginInfo> list = {};
 
     std::wstring registry = L"https://raw.githubusercontent.com/LatiteScripting/Scripts/master/Plugins";
     auto index = http::request(L"GET", registry + L"/plugins.json");
     if (!index) {
-        Ma4::getClientMessageQueue().push(index.error());
+        if (reportErrors) {
+            Ma4::getClientMessageQueue().push(index.error());
+        } else {
+            Logger::Warn("Plugin registry: {}", index.error());
+        }
         return list;
     }
     if (index->status != 200) return list;

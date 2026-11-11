@@ -138,7 +138,8 @@ namespace ios {
         Record,
         Stop,
         Flag,
-        Camera
+        Camera,
+        Minus
     };
 
     enum class ButtonKind {
@@ -188,6 +189,17 @@ namespace ios {
         float scale = 1.f;
         bool rtl = false;
         float dt = 1.f / 60.f;
+
+        /// Per-frame counters of the expensive Direct2D / DirectWrite calls (reset by beginFrame). The harness prints
+        /// them in `--bench` mode so a regression in the number of layers / layouts shows up immediately.
+        struct Stats {
+            uint32_t layouts = 0;    // IDWriteTextLayout created
+            uint32_t layoutHits = 0; // IDWriteTextLayout served from the cache
+            uint32_t gradients = 0;  // gradient stop collections + brushes created
+            uint32_t geometries = 0; // path geometries built
+            uint32_t layers = 0;     // PushLayer calls
+        };
+        mutable Stats stats;
 
         /// iOS points -> device pixels
         [[nodiscard]] float S(float points) const { return points * scale; }
@@ -267,6 +279,8 @@ namespace ios {
 
         // ---------------------------------------------------------------- text
         void text(Rect const& r, std::wstring const& s, TextStyle const& st);
+        /// Same as text(), but painted with `brush` (gradient fills) instead of the style colour.
+        void textBrush(Rect const& r, std::wstring const& s, TextStyle const& st, ID2D1Brush* brush);
         Vec2 measure(std::wstring const& s, TextStyle const& st, float maxWidth = 100000.f);
         float textWidth(std::wstring const& s, TextStyle const& st) { return measure(s, st).x; }
         /// Width of the first `count` characters (used to position a text caret)
@@ -294,6 +308,13 @@ namespace ios {
                              bool enabled = true);
         /// `scrollEdgeEffectStyle`: content fades into `base` towards the edge so floating glass controls stay legible.
         void scrollEdge(Rect const& r, bool top, Col base, float strength, float solid = 0.f);
+        /// A real backdrop for glass: a pre-blurred picture of what is behind the window, drawn into `dest`. Regular glass
+        /// surfaces then show it (clipped to their shape) instead of the flat frosted backing. Used by the launcher, whose
+        /// wallpaper is a bitmap; the in-game menu has no such picture and keeps the frosted backing. Call every frame
+        /// after beginFrame(); pass nullptr to switch it off.
+        void setBackdrop(ID2D1Bitmap1* bmp, Rect const& dest);
+        /// True while any spring / animation is still moving (hosts that render on demand keep drawing until it is false).
+        [[nodiscard]] bool animating() const;
         /// Fill / stroke a rounded (continuous-corner) rectangle with an arbitrary brush.
         void fillBrush(Rect const& r, float radius, ID2D1Brush* brush);
         void strokeBrush(Rect const& r, float radius, ID2D1Brush* brush, float thickness);
@@ -325,6 +346,19 @@ namespace ios {
         /// Fills a continuous-corner ("squircle") rounded rectangle.
         void fillSmooth(Rect const& r, float radius, Col c);
         void strokeSmooth(Rect const& r, float radius, Col c, float thickness);
+        /// Fills `r` clipped to the rounded rectangle `card` (the pressed highlight of a first / last row of a grouped
+        /// card). Exact, but it builds a geometry, so only use it for rare states: a clip layer every frame is far
+        /// more expensive.
+        void fillClipped(Rect const& r, Rect const& card, float cardRadius, Col c);
+        /// A grouped card is no longer clipped with a layer. While a card is active, fillCell() (the pressed highlight of
+        /// a row) follows its rounded corners instead.
+        void beginCard(Rect const& card, float radius) {
+            cardRect_ = card;
+            cardRadius_ = radius;
+            hasCard_ = true;
+        }
+        void endCard() { hasCard_ = false; }
+        void fillCell(Rect const& r, Col c);
 
         ID2D1DeviceContext* ctx() const { return g.ctx; }
 
@@ -342,6 +376,35 @@ namespace ios {
         void ensureFactoryResources();
 
         void glassSurface(Rect const& bounds, float radius, GlassStyle const& st, ID2D1Geometry* geo);
+        void tileSheen(Rect const& r, float radius);
+        void drawText(Rect const& r, std::wstring const& s, TextStyle const& st, ID2D1Brush* brush);
+        ComPtr<ID2D1BitmapBrush1> backdropBrush_;
+        ID2D1Bitmap1* backdropBmp_ = nullptr;
+
+        // DirectWrite layouts are expensive to create and almost every string is identical from frame to frame, so
+        // they are cached (key: text + format + size + box + flags) and dropped after ~3 s without use.
+        struct TextEntry {
+            std::wstring s;
+            IDWriteTextFormat* fmt = nullptr;
+            float size = 0.f, w = 0.f, h = 0.f;
+            uint32_t flags = 0;
+            ComPtr<IDWriteTextLayout> layout;
+            uint64_t lastFrame = 0;
+        };
+        // Gradient stop collections + brushes are cached by their stops; only the end points change per use.
+        struct GradEntry {
+            ComPtr<ID2D1GradientStopCollection> coll;
+            ComPtr<ID2D1LinearGradientBrush> brush;
+            uint64_t lastFrame = 0;
+        };
+        mutable std::unordered_map<uint64_t, TextEntry> textCache_;
+        std::unordered_map<uint64_t, GradEntry> gradCache_;
+        std::vector<char> layerFlags_; // 1 = pushOpacity really pushed a layer
+        IDWriteTextFormat* fontSig_[static_cast<int>(Font::Count)] = {}; // to notice a renderer that rebuilt its fonts
+        ID2D1DeviceContext* ctxSig_ = nullptr;                          // ... or its device context
+        Rect cardRect_ = {};
+        float cardRadius_ = 0.f;
+        bool hasCard_ = false;
 
         std::unordered_map<uint64_t, Anim> anims_;
         std::unordered_map<uint64_t, Anim> springs_;
@@ -364,6 +427,8 @@ namespace ios {
     /// Liquid Glass sheen + specular rim drawn over a plate that was already filled (HUD modules). It only needs a
     /// device context, no Ui frame. `strength` (0..1) follows the opacity of the plate underneath.
     void drawGlassPlate(ID2D1DeviceContext* ctx, Rect const& r, float radius, float strength);
+    /// Drops the gradient brushes drawGlassPlate keeps between frames (renderer cleanup).
+    void releaseGlassPlateCache();
 
     /// Default UI font family: SF Pro (if installed) -> Segoe UI Variable -> Segoe UI.
     std::wstring defaultFontFamily();

@@ -153,10 +153,14 @@ namespace ios {
 
         void drawColorWell(Ui& ui, Vec2 c, float radius, Col col) {
             Rect box(c.x - radius, c.y - radius, c.x + radius, c.y + radius);
-            ui.pushClipRRect(box, radius);
-            if (col.a < 0.999f) drawChecker(ui, box, radius * 0.5f);
-            ui.circle(c, radius, col);
-            ui.popClipRRect();
+            if (col.a < 0.999f) {
+                ui.pushClipRRect(box, radius);
+                drawChecker(ui, box, radius * 0.5f);
+                ui.circle(c, radius, col);
+                ui.popClipRRect();
+            } else {
+                ui.circle(c, radius, col);
+            }
             ui.circleStroke(c, radius - ui.S(0.5f), Col(1.f, 1.f, 1.f, ui.pal.dark ? 0.35f : 0.75f), std::max(1.f, ui.S(1.f)));
             ui.circleStroke(c, radius + ui.S(0.5f), Col(0.f, 0.f, 0.f, 0.18f), std::max(1.f, ui.S(0.75f)));
         }
@@ -688,7 +692,7 @@ namespace ios {
         const bool cardVisible = card.bottom > view.top && card.top < view.bottom;
         if (cardVisible) drawCard(ui, card);
 
-        ui.pushClipRRect(card, S(kGroupR));
+        ui.beginCard(card, S(kGroupR));
         for (size_t i = 0; i < rows.size(); ++i) {
             ModuleRow& m = *rows[i];
             Rect rc(x, y + rowH * static_cast<float>(i), x + w, y + rowH * static_cast<float>(i + 1));
@@ -725,7 +729,7 @@ namespace ios {
             if (hasCtl && navigable) {
                 chevClick = ui.click(rid ^ 0xC1ull, Rect(ctl.right + S(6.f), rc.top, rc.right, rc.bottom), interactive);
             }
-            if (rowClick.pressed || chevClick.pressed) ui.fillRect(rc, pal.cellPressed);
+            if (rowClick.pressed || chevClick.pressed) ui.fillCell(rc, pal.cellPressed);
             (void)tr;
 
             // icon tile
@@ -793,7 +797,7 @@ namespace ios {
 
             if (rowClick.clicked || chevClick.clicked) pushDetail(m.id);
         }
-        ui.popClipRRect();
+        ui.endCard();
         return card.bottom;
     }
 
@@ -1007,11 +1011,7 @@ namespace ios {
             drawCard(ui, card);
             uint64_t id = Ui::idOf(&detailId_, 0x4E5E7ull);
             auto cr = ui.click(id, card, interactive);
-            if (cr.pressed) {
-                ui.pushClipRRect(card, S(kGroupR));
-                ui.fillRect(card, pal.cellPressed);
-                ui.popClipRRect();
-            }
+            if (cr.pressed) ui.fillClipped(card, card, S(kGroupR), pal.cellPressed);
             ui.text(card, f.str.reset, TextStyle(Font::Regular, S(17.f), pal.red, HAlign::Center, VAlign::Center));
             if (cr.clicked) d.reset();
             y = card.bottom + S(24.f);
@@ -1104,7 +1104,7 @@ namespace ios {
         const bool visible = card.bottom > view.top - S(8.f) && card.top < view.bottom + S(8.f);
         if (visible) {
             drawCard(ui, card);
-            ui.pushClipRRect(card, S(kGroupR));
+            ui.beginCard(card, S(kGroupR));
             float ry = y;
             for (size_t i = 0; i < rows.size(); ++i) {
                 Rect rc(x, ry, x + w, ry + hs[i]);
@@ -1117,7 +1117,7 @@ namespace ios {
                 }
                 ry += hs[i];
             }
-            ui.popClipRRect();
+            ui.endCard();
         }
         y += total;
 
@@ -1223,7 +1223,7 @@ namespace ios {
                 }
             } else {
                 auto cr = ui.click(r.id, rc, interactive);
-                if (cr.pressed) ui.fillRect(rc, pal.cellPressed);
+                if (cr.pressed) ui.fillCell(rc, pal.cellPressed);
                 std::wstring cur = r.options[static_cast<size_t>(*r.choice)];
                 float valueW = std::min(ui.textWidth(cur, TextStyle(Font::Regular, S(17.f), pal.secondaryLabel)) + S(4.f),
                                         inner.getWidth() * 0.5f);
@@ -1274,7 +1274,7 @@ namespace ios {
 
         case SettingRow::Kind::Color: {
             auto cr = ui.click(r.id, rc, interactive);
-            if (cr.pressed) ui.fillRect(rc, pal.cellPressed);
+            if (cr.pressed) ui.fillCell(rc, pal.cellPressed);
             Vec2 c = { inner.right - S(15.f), rc.centerY() };
             drawColorWell(ui, c, S(14.f), r.color);
             drawLabel(ui, Rect(inner.left, rc.top, c.x - S(26.f), rc.bottom), r.title, r.subtitle);
@@ -1306,7 +1306,7 @@ namespace ios {
 
         case SettingRow::Kind::Action: {
             auto cr = ui.click(r.id, rc, interactive);
-            if (cr.pressed) ui.fillRect(rc, pal.cellPressed);
+            if (cr.pressed) ui.fillCell(rc, pal.cellPressed);
             ui.text(rc, r.title, TextStyle(Font::Regular, S(17.f), pal.accent, HAlign::Center, VAlign::Center));
             if (cr.clicked && r.action) r.action();
         } break;

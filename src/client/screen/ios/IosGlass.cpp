@@ -87,15 +87,42 @@ namespace ios {
     }
 
     // ======================================================================================== brush helpers
+    // Stop collections and brushes are GPU resources: creating them for every surface every frame was one of the
+    // costs of the glass look. They are cached by their stops (the colours are almost always the same from frame to
+    // frame); only the two end points are set for each use. The returned brush is shared, so it must be used before
+    // linearBrush() is called again with the same stops.
     ComPtr<ID2D1LinearGradientBrush> Ui::linearBrush(Vec2 a, Vec2 b, std::vector<D2D1_GRADIENT_STOP> const& stops) {
-        ComPtr<ID2D1GradientStopCollection> coll;
         ComPtr<ID2D1LinearGradientBrush> brush;
         if (!g.ctx || stops.empty()) return brush;
+
+        uint64_t key = 1469598103934665603ull;
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(stops.data());
+        for (size_t i = 0, n = stops.size() * sizeof(D2D1_GRADIENT_STOP); i < n; ++i) {
+            key ^= bytes[i];
+            key *= 1099511628211ull;
+        }
+
+        auto it = gradCache_.find(key);
+        if (it != gradCache_.end() && it->second.brush) {
+            it->second.lastFrame = frame_;
+            it->second.brush->SetStartPoint(pt(a.x, a.y));
+            it->second.brush->SetEndPoint(pt(b.x, b.y));
+            return it->second.brush;
+        }
+
+        ++stats.gradients;
+        ComPtr<ID2D1GradientStopCollection> coll;
         if (FAILED(g.ctx->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), coll.GetAddressOf()))) {
             return brush;
         }
         g.ctx->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(pt(a.x, a.y), pt(b.x, b.y)), coll.Get(),
                                          brush.GetAddressOf());
+        if (brush) {
+            GradEntry& e = gradCache_[key];
+            e.coll = coll;
+            e.brush = brush;
+            e.lastFrame = frame_;
+        }
         return brush;
     }
 
@@ -120,13 +147,14 @@ namespace ios {
         g.ctx->GetTransform(&old);
         // the geometry is built at the origin: move it into place and move the brush back so that gradients keep
         // using the absolute coordinates they were created with
+        D2D1::Matrix3x2F base;
+        brush->GetTransform(&base);
         D2D1::Matrix3x2F brushShift = D2D1::Matrix3x2F::Translation(-r.left, -r.top);
-        brush->SetTransform(brushShift);
+        brush->SetTransform(base * brushShift);
         g.ctx->SetTransform(D2D1::Matrix3x2F::Translation(r.left, r.top) * D2D1::Matrix3x2F(old));
         g.ctx->FillGeometry(geo.Get(), brush);
         g.ctx->SetTransform(old);
-        D2D1::Matrix3x2F ident = D2D1::Matrix3x2F::Identity();
-        brush->SetTransform(ident);
+        brush->SetTransform(base);
     }
 
     void Ui::strokeBrush(Rect const& r, float radius, ID2D1Brush* brush, float thickness) {
@@ -149,13 +177,48 @@ namespace ios {
         }
         D2D1::Matrix3x2F old;
         g.ctx->GetTransform(&old);
+        D2D1::Matrix3x2F base;
+        brush->GetTransform(&base);
         D2D1::Matrix3x2F brushShift = D2D1::Matrix3x2F::Translation(-in.left, -in.top);
-        brush->SetTransform(brushShift);
+        brush->SetTransform(base * brushShift);
         g.ctx->SetTransform(D2D1::Matrix3x2F::Translation(in.left, in.top) * D2D1::Matrix3x2F(old));
         g.ctx->DrawGeometry(geo.Get(), brush, thickness);
         g.ctx->SetTransform(old);
-        D2D1::Matrix3x2F ident = D2D1::Matrix3x2F::Identity();
-        brush->SetTransform(ident);
+        brush->SetTransform(base);
+    }
+
+    // ======================================================================================== backdrop / activity
+    void Ui::setBackdrop(ID2D1Bitmap1* bmp, Rect const& dest) {
+        if (!bmp || !g.ctx || dest.getWidth() <= 1.f || dest.getHeight() <= 1.f) {
+            backdropBrush_.Reset();
+            backdropBmp_ = nullptr;
+            return;
+        }
+        if (backdropBmp_ != bmp || !backdropBrush_) {
+            backdropBrush_.Reset();
+            D2D1_BITMAP_BRUSH_PROPERTIES1 bp =
+                D2D1::BitmapBrushProperties1(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP, D2D1_INTERPOLATION_MODE_LINEAR);
+            if (FAILED(g.ctx->CreateBitmapBrush(bmp, &bp, nullptr, backdropBrush_.GetAddressOf()))) {
+                backdropBmp_ = nullptr;
+                return;
+            }
+            backdropBmp_ = bmp;
+        }
+        D2D1_SIZE_F sz = bmp->GetSize();
+        if (sz.width > 0.f && sz.height > 0.f) {
+            backdropBrush_->SetTransform(D2D1::Matrix3x2F::Scale(dest.getWidth() / sz.width, dest.getHeight() / sz.height) *
+                                         D2D1::Matrix3x2F::Translation(dest.left, dest.top));
+        }
+    }
+
+    bool Ui::animating() const {
+        for (auto const& kv : anims_) {
+            if (std::fabs(kv.second.vel) > 0.01f) return true;
+        }
+        for (auto const& kv : springs_) {
+            if (std::fabs(kv.second.vel) > 0.004f) return true;
+        }
+        return false;
     }
 
     // ======================================================================================== glass surface
@@ -216,9 +279,16 @@ namespace ios {
             }
         }
 
-        // ---- frosted backing (stands in for the backdrop blur)
+        // ---- backdrop: a real blurred picture of the wallpaper when the host supplies one (launcher)
+        const bool useBackdrop = backdropBrush_ && !st.clear && st.backing > 0.01f;
+        if (useBackdrop) {
+            backdropBrush_->SetOpacity(clamp01(st.backing) * op);
+            fill(backdropBrush_.Get());
+        }
+
+        // ---- frosted backing (stands in for the backdrop blur; a lighter veil over a real backdrop)
         if (st.backing > 0.01f) {
-            const float ba = (st.clear ? 0.14f : 0.64f) * clamp01(st.backing) * op;
+            const float ba = (st.clear ? 0.14f : (useBackdrop ? 0.20f : 0.64f)) * clamp01(st.backing) * op;
             g.brush->SetColor(pal.glassBacking.asAlpha(ba).get());
             fill(g.brush);
         }
@@ -440,19 +510,58 @@ namespace ios {
     }
 
     // ======================================================================================== HUD plates
+    namespace {
+        // HUD plates are drawn every frame by every text module: keep their two gradient brushes
+        struct PlateCache {
+            ID2D1DeviceContext* ctx = nullptr;
+            struct Entry {
+                ComPtr<ID2D1GradientStopCollection> coll;
+                ComPtr<ID2D1LinearGradientBrush> brush;
+            };
+            std::unordered_map<uint64_t, Entry> map;
+        };
+        PlateCache& plateCache() {
+            static PlateCache c;
+            return c;
+        }
+    } // namespace
+
+    void releaseGlassPlateCache() {
+        plateCache().map.clear();
+        plateCache().ctx = nullptr;
+    }
+
     void drawGlassPlate(ID2D1DeviceContext* ctx, Rect const& r, float radius, float strength) {
         const float w = r.getWidth(), h = r.getHeight();
-        strength = clamp01(strength);
+        // quantised so the cache is hit while the plate fades
+        strength = std::round(clamp01(strength) * 32.f) / 32.f;
         if (!ctx || w < 2.f || h < 2.f || strength < 0.01f) return;
         radius = std::clamp(radius, 0.f, std::min(w, h) * 0.5f);
 
+        PlateCache& cache = plateCache();
+        if (cache.ctx != ctx || cache.map.size() > 96) {
+            cache.map.clear();
+            cache.ctx = ctx;
+        }
         auto brushFor = [&](D2D1_POINT_2F a, D2D1_POINT_2F b, std::vector<D2D1_GRADIENT_STOP> const& stops) {
-            ComPtr<ID2D1GradientStopCollection> coll;
-            ComPtr<ID2D1LinearGradientBrush> br;
-            if (SUCCEEDED(ctx->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), coll.GetAddressOf()))) {
-                ctx->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(a, b), coll.Get(), br.GetAddressOf());
+            uint64_t key = 1469598103934665603ull;
+            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(stops.data());
+            for (size_t i = 0, n = stops.size() * sizeof(D2D1_GRADIENT_STOP); i < n; ++i) {
+                key ^= bytes[i];
+                key *= 1099511628211ull;
             }
-            return br;
+            auto it = cache.map.find(key);
+            if (it != cache.map.end() && it->second.brush) {
+                it->second.brush->SetStartPoint(a);
+                it->second.brush->SetEndPoint(b);
+                return it->second.brush;
+            }
+            PlateCache::Entry e;
+            if (SUCCEEDED(ctx->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), e.coll.GetAddressOf()))) {
+                ctx->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(a, b), e.coll.Get(), e.brush.GetAddressOf());
+            }
+            if (e.brush) cache.map[key] = e;
+            return e.brush;
         };
         const float k = strength;
 

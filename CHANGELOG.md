@@ -3,6 +3,42 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.1.0] - 2026-11-12
+
+### Added
+- **Ma4 Launcher** (`Ma4Launcher.exe`, built next to `ma4.dll`): an iOS lock-screen style window with the date, a big
+  clock, the **Ma4** title and Liquid Glass buttons over a wallpaper.
+  - **Play** starts Minecraft Bedrock, waits until the game has created its renderer, gives the sandboxed game access
+    to `ma4.dll` (the "ALL APPLICATION PACKAGES" ACL) and loads it. With the game already running the button reads
+    *Inject*, once loaded *Active*. A status chip shows what it is doing and what went wrong.
+  - **Wallpaper**: choose any picture in *Settings* (png, jpg, bmp, gif, tif, webp ...). It is copied to
+    `%LocalAppData%\ma4\Launcher`, drawn "aspect fill" with a little parallax, with adjustable **dim** and **blur**;
+    *Reset* returns to the built-in aurora.
+  - The glass controls show a **real blurred backdrop** of the wallpaper (new `Ui::setBackdrop`); the in-game menu
+    keeps its frosted backing because it has no such picture.
+  - Settings: wallpaper, dim, blur, 12 / 24 hour clock, close after launching, location of `ma4.dll`. Japanese and
+    English UI (follows Windows).
+  - Command line: `Ma4Launcher.exe --inject <pid> <dll>` and `--render out.png [W H] [--sheet] [--state ...]`
+    (screenshots without a window).
+
+### Fixed
+- **Opening the menu lagged and froze the game.**
+  - The plugin registry (one download for the index plus one per plugin) was fetched **on the render thread** the first
+    time the menu was drawn and again whenever the plugin list changed, so the game stood still for as long as the
+    network took. It now downloads on a background thread; the list appears when it arrives, and an offline start
+    retries after two minutes instead of blocking.
+  - The glass UI is about twice as cheap per frame (UI harness, RTX 4070 SUPER: 1080p 4.2 -> 2.1 ms, 4K 7 - 15 ->
+    3.5 ms; UI CPU time 2.9 -> 0.9 ms): DirectWrite text layouts and gradient brushes are cached instead of created
+    for every string / surface every frame, the clip layer behind every row icon (about 20 layers per frame) is gone,
+    grouped cards no longer use a clip layer, a fully opaque opacity layer is skipped, remaining layers have tight
+    bounds, and shadows use rounded-rectangle primitives instead of a tessellated path.
+  - HUD plates no longer create two gradient brushes per module per frame.
+
+### Changed
+- The data folder is `%LocalAppData%\ma4` (the README still said Roaming).
+- `tools/ui-harness` has a `--bench [W H]` mode that prints the frame cost and the number of layers / layouts /
+  gradients per frame.
+
 ## [1.0.5] - 2026-11-11
 
 ### Changed

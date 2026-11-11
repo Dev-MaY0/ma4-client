@@ -1,0 +1,4 @@
+#include "LauncherResource.h"
+
+IDI_APP ICON "ma4.ico"
+IDR_LOGO RCDATA "../assets/logo.png"

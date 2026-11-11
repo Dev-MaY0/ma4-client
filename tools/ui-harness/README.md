@@ -9,3 +9,7 @@ procedural background are fake.
     out\harness.exe <output-dir> ..\..\assets\logo.png
 
 It is not part of the CMake build.
+
+`out\harness.exe --bench [width height]` does not write PNGs: it draws the fake game scene (optionally with the menu
+blur) and every menu page 150 times, waits for the GPU after each frame and prints the frame time (average, median,
+95th percentile, slowest) plus how many text layouts, gradients, path geometries and layers the UI created per frame.

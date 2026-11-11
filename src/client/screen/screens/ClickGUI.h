@@ -4,8 +4,11 @@
 #include "client/screen/TextBox.h"
 #include "client/screen/ios/IosShell.h"
 #include "client/localization/LocalizeString.h"
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 /// The ma4 mod menu: an iOS "Settings app" styled window (see client/screen/ios).
@@ -13,6 +16,7 @@
 class ClickGUI : public Screen {
 public:
     ClickGUI();
+    ~ClickGUI();
 
     void onRender(class Event& ev);
     void onCleanup(Event& ev);
@@ -39,6 +43,17 @@ private:
         bool installed = false;
     };
 
+    /// Plugin registry entry as downloaded by the background thread.
+    struct MarketInfo {
+        std::string id;
+        std::wstring name, author, desc;
+    };
+    struct MarketFetch {
+        std::vector<MarketInfo> result;
+        std::atomic<bool> done { false };
+    };
+
+    void startMarketFetch();
     void rebuildMarketIfNeeded();
     ios::Strings makeStrings();
     void fillModules(ios::Frame& f);
@@ -48,6 +63,13 @@ private:
 
     ios::Shell shell;
     std::vector<MarketEntry> market;
+    // The registry is a network download (one request for the index plus one per plugin). It used to run on the render
+    // thread the first time the menu was drawn, which froze the game for seconds: it now runs on its own thread.
+    std::vector<MarketInfo> marketInfo;
+    std::shared_ptr<MarketFetch> marketFetch;
+    std::thread marketThread;
+    std::chrono::steady_clock::time_point marketNextTry {};
+    bool marketRequested = false;
     size_t lastModuleCount = 0;
     bool marketBuilt = false;
     bool shouldRebuildMarket = false;

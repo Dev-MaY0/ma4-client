@@ -36,7 +36,10 @@ public:
         std::string id;
         std::wstring name, author, version, desc;
     };
-    std::vector<PluginInfo> fetchPluginsFromMarket();
+    /// Downloads the plugin registry (blocking: one request for the index plus one per plugin). `reportErrors`
+    /// pushes a network error to the chat; background callers pass false because the message queue may already be
+    /// gone while the client is being ejected.
+    std::vector<PluginInfo> fetchPluginsFromMarket(bool reportErrors = true);
     std::vector<PluginInfo> fetchPlugins();
 
     void init();

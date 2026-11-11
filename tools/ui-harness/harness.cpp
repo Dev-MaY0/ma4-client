@@ -9,6 +9,7 @@
 #include <dxgi1_2.h>
 #include <wincodec.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -27,6 +28,10 @@ struct Env {
     ComPtr<IWICImagingFactory> wic;
     ComPtr<IDWriteTextFormat> fonts[5];
     ComPtr<ID2D1Bitmap1> logo;
+    ComPtr<ID2D1Bitmap1> blurCopy;
+    ComPtr<ID2D1Effect> blurFx;
+    ComPtr<ID3D11DeviceContext> imm;
+    ComPtr<ID3D11Query> query;
     UINT w = 1920, h = 1080;
 };
 
@@ -49,6 +54,13 @@ static bool initEnv(Env& e) {
     }
     ComPtr<IDXGIDevice> dxgi;
     check(e.d3d.As(&dxgi), "dxgi");
+    {
+        ComPtr<IDXGIAdapter> ad;
+        DXGI_ADAPTER_DESC desc {};
+        if (SUCCEEDED(dxgi->GetAdapter(ad.GetAddressOf())) && SUCCEEDED(ad->GetDesc(&desc))) {
+            std::wprintf(L"adapter: %s (%llu MB)%c", desc.Description, static_cast<unsigned long long>(desc.DedicatedVideoMemory >> 20), L'\n');
+        }
+    }
     check(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, __uuidof(ID2D1Factory1), nullptr,
                             reinterpret_cast<void**>(e.d2dFactory.GetAddressOf())),
           "D2D1CreateFactory");
@@ -111,7 +123,7 @@ static void writePng(Env& e, const wchar_t* path) {
     std::wprintf(L"wrote %s\n", path);
 }
 
-static void drawScene(Env& e, bool bright) {
+static void drawScene(Env& e, bool bright, bool doBlur = true) {
     auto* c = e.ctx.Get();
     D2D1_SIZE_F sz = c->GetSize();
     // sky gradient
@@ -151,17 +163,20 @@ static void drawScene(Env& e, bool bright) {
     e.brush->SetColor(D2D1::ColorF(1, 1, 1, 0.9f));
     c->FillRectangle(D2D1::RectF(sz.width / 2 - 1, sz.height / 2 - 12, sz.width / 2 + 1, sz.height / 2 + 12), e.brush.Get());
     c->FillRectangle(D2D1::RectF(sz.width / 2 - 12, sz.height / 2 - 1, sz.width / 2 + 12, sz.height / 2 + 1), e.brush.Get());
-    // blur everything drawn so far (menu blur)
-    ComPtr<ID2D1Bitmap1> copy;
-    D2D1_BITMAP_PROPERTIES1 bp = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    c->CreateBitmap(D2D1::SizeU(e.w, e.h), nullptr, 0, bp, copy.GetAddressOf());
+    if (!doBlur) return;
+    // blur everything drawn so far (menu blur); same effect settings as the game's menu blur
+    if (!e.blurCopy) {
+        D2D1_BITMAP_PROPERTIES1 bp = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        c->CreateBitmap(D2D1::SizeU(e.w, e.h), nullptr, 0, bp, e.blurCopy.GetAddressOf());
+        c->CreateEffect(CLSID_D2D1GaussianBlur, e.blurFx.GetAddressOf());
+    }
     c->Flush();
-    copy->CopyFromBitmap(nullptr, e.target.Get(), nullptr);
-    ComPtr<ID2D1Effect> blur;
-    c->CreateEffect(CLSID_D2D1GaussianBlur, blur.GetAddressOf());
-    blur->SetInput(0, copy.Get());
-    blur->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, 18.f);
-    c->DrawImage(blur.Get());
+    e.blurCopy->CopyFromBitmap(nullptr, e.target.Get(), nullptr);
+    e.blurFx->SetInput(0, e.blurCopy.Get());
+    e.blurFx->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, 18.f);
+    e.blurFx->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_HARD);
+    e.blurFx->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED);
+    c->DrawImage(e.blurFx.Get());
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -260,7 +275,7 @@ static void buildFrame(Frame& f, Env& e, bool hudPreview) {
     f.replay.toggleRecording = [] {};
     f.replay.addMarker = [] {};
     f.replay.remove = [](uint64_t) {};
-    f.version = L"v1.0.5";
+    f.version = L"v1.1.0";
     f.str.appName = L"ma4";
     f.logo = e.logo.Get();
     struct M {
@@ -532,6 +547,109 @@ static void renderScenario(Env& e, const wchar_t* out, bool light, bool bright, 
     writePng(e, out);
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------
+// --bench: frame cost of the menu. Each frame is a fake game scene, optionally the menu blur, optionally the menu;
+// the GPU is waited on after every frame so the numbers are what a game frame would pay.
+static void syncGpu(Env& e) {
+    if (!e.imm) {
+        e.d3d->GetImmediateContext(e.imm.GetAddressOf());
+        D3D11_QUERY_DESC qd {};
+        qd.Query = D3D11_QUERY_EVENT;
+        e.d3d->CreateQuery(&qd, e.query.GetAddressOf());
+    }
+    e.imm->End(e.query.Get());
+    e.imm->Flush();
+    while (e.imm->GetData(e.query.Get(), nullptr, 0, 0) == S_FALSE) {
+    }
+}
+
+static void bench(Env& e, const char* label, Section sec, bool detail, bool blur, bool withUi, int frames, bool viewer = false) {
+    Shell shell;
+    Frame f;
+    buildFrame(f, e, true);
+    shell.reset(true);
+    shell.selectSection(sec);
+    Ui& ui = Ui::get();
+    ui.releaseDeviceResources();
+    Gfx g;
+    g.ctx = e.ctx.Get();
+    g.brush = e.brush.Get();
+    g.dwrite = e.dwrite.Get();
+    ComPtr<ID2D1Factory> fac;
+    e.ctx->GetFactory(fac.GetAddressOf());
+    g.d2d = fac.Get();
+    for (int i = 0; i < 5; ++i) g.fonts[i] = e.fonts[i].Get();
+    Rect screen(0, 0, static_cast<float>(e.w), static_cast<float>(e.h));
+    float scale = Shell::computeScale(screen);
+    Palette pal = Palette::make(Appearance::Dark, Col(10.f / 255.f, 132.f / 255.f, 1.f, 1.f));
+    if (detail) shell.pushDetail(102);
+    if (viewer) shell.pushReplay(11);
+
+    const int warm = 60;
+    LARGE_INTEGER fq, t0, t1, c0, c1;
+    QueryPerformanceFrequency(&fq);
+    double cpuUi = 0.0;
+    std::vector<double> times;
+    unsigned long long layouts = 0, hits = 0, grads = 0, geos = 0, layers = 0;
+    LARGE_INTEGER f0, f1;
+    for (int i = 0; i < warm + frames; ++i) {
+        if (i == warm) QueryPerformanceCounter(&t0);
+        QueryPerformanceCounter(&f0);
+        e.ctx->BeginDraw();
+        e.ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+        drawScene(e, false, blur);
+        if (withUi) {
+            Input in;
+            in.mouse = Vec2(e.w * 0.36f + 200.f * std::sin(i * 0.05f), e.h * 0.35f + 100.f * std::cos(i * 0.07f));
+            in.dt = 1.f / 60.f;
+            QueryPerformanceCounter(&c0);
+            ui.beginFrame(g, in, pal, scale, false);
+            shell.frame(ui, screen, f, true);
+            ui.endFrame();
+            QueryPerformanceCounter(&c1);
+            if (i >= warm) {
+                cpuUi += static_cast<double>(c1.QuadPart - c0.QuadPart) / static_cast<double>(fq.QuadPart) * 1000.0;
+                layouts += ui.stats.layouts;
+                hits += ui.stats.layoutHits;
+                grads += ui.stats.gradients;
+                geos += ui.stats.geometries;
+                layers += ui.stats.layers;
+            }
+        }
+        HRESULT hr = e.ctx->EndDraw();
+        if (FAILED(hr)) {
+            std::printf("EndDraw failed 0x%08lx\n", static_cast<unsigned long>(hr));
+            return;
+        }
+        syncGpu(e);
+        QueryPerformanceCounter(&f1);
+        if (i >= warm) times.push_back(static_cast<double>(f1.QuadPart - f0.QuadPart) / static_cast<double>(fq.QuadPart) * 1000.0);
+    }
+    QueryPerformanceCounter(&t1);
+    std::sort(times.begin(), times.end());
+    const double p50 = times[times.size() / 2], p95 = times[times.size() * 95 / 100], mx = times.back();
+    int slow = 0;
+    for (double v : times) slow += v > 10.0 ? 1 : 0;
+    double total = static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(fq.QuadPart) * 1000.0 / frames;
+    std::printf("%-34s frame %6.2f ms (p50 %5.2f p95 %5.2f max %5.2f, >10ms: %3d) | ui cpu %5.2f ms | per frame: layouts %5.1f (+%5.1f cached) gradients %5.1f geometries %5.1f layers %4.1f\n",
+                label, total, p50, p95, mx, slow, cpuUi / frames, static_cast<double>(layouts) / frames, static_cast<double>(hits) / frames,
+                static_cast<double>(grads) / frames, static_cast<double>(geos) / frames, static_cast<double>(layers) / frames);
+}
+
+static void runBench(Env& e) {
+    const int n = 150;
+    std::printf("bench %ux%u\n", e.w, e.h);
+    bench(e, "scene only", Section::All, false, false, false, n);
+    bench(e, "scene + menu blur", Section::All, false, true, false, n);
+    bench(e, "scene + menu (modules)", Section::All, false, false, true, n);
+    bench(e, "scene + blur + menu (modules)", Section::All, false, true, true, n);
+    bench(e, "scene + blur + menu (detail)", Section::All, true, true, true, n);
+    bench(e, "scene + blur + menu (settings)", Section::Settings, false, true, true, n);
+    bench(e, "scene + blur + menu (replay)", Section::Replay, false, true, true, n);
+    bench(e, "scene + blur + replay viewer", Section::Replay, false, true, true, n, true);
+}
+
 static void loadLogo(Env& e, const wchar_t* path) {
     ComPtr<IWICBitmapDecoder> dec;
     if (FAILED(e.wic->CreateDecoderFromFilename(path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, dec.GetAddressOf()))) return;
@@ -547,6 +665,15 @@ static void loadLogo(Env& e, const wchar_t* path) {
 
 int wmain(int argc, wchar_t** argv) {
     Env e;
+    if (argc > 1 && std::wstring(argv[1]) == L"--bench") {
+        if (argc > 3) {
+            e.w = static_cast<UINT>(std::wcstoul(argv[2], nullptr, 10));
+            e.h = static_cast<UINT>(std::wcstoul(argv[3], nullptr, 10));
+        }
+        initEnv(e);
+        runBench(e);
+        return 0;
+    }
     initEnv(e);
     std::wstring outDir = argc > 1 ? argv[1] : L".";
     if (argc > 2) loadLogo(e, argv[2]);
@@ -575,6 +702,7 @@ int wmain(int argc, wchar_t** argv) {
     g_search.clear();
     g_press = true;
     renderScenario(e, p(L"16_press_toggle.png").c_str(), false, false, Section::All, false, -1, false, 1486, 313, 0);
+    renderScenario(e, p(L"17_press_row.png").c_str(), false, false, Section::All, false, -1, false, 1000, 316, 0);
     g_press = false;
     return 0;
 }

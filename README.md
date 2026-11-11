@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/icon.png" width="128" alt="ma4 icon"></p>
 
-# ma4 Client  <small>v1.0.5</small>
+# ma4 Client  <small>v1.1.0</small>
 
 **ma4 Client** is a DLL modification for Minecraft Bedrock Edition (Windows 10/11) with an iPhone / iOS styled
 interface, 30+ customizable modules, a HUD editor, a replay recorder and a JavaScript plugin system.
@@ -21,9 +21,13 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
 | --- | --- | --- |
 | ![Colour sheet](docs/screenshots/color-sheet.png) | ![Recorder](docs/screenshots/replay-recorder.png) | ![Viewer](docs/screenshots/replay-viewer.png) |
 
+| Launcher | Launcher settings |
+| --- | --- |
+| ![Launcher](docs/screenshots/launcher-home.png) | ![Launcher settings](docs/screenshots/launcher-settings.png) |
+
 ## What is different from Latite
 
-- **Renamed** to ma4 Client (DLL: `ma4.dll`, data folder: `%AppData%\Roaming\ma4`).
+- **Renamed** to ma4 Client (DLL: `ma4.dll`, data folder: `%LocalAppData%\ma4`).
 - **iOS 26 "Liquid Glass" UI.** The mod menu is an iPadOS Settings-style window: floating glass sidebar with a
   morphing selection capsule, navigation stack with floating glass back / close buttons and a scroll edge effect,
   grouped inset cards, an oval-knob switch, capsule sliders, glass segmented controls, a glass pull-down menu, a
@@ -32,6 +36,8 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
   *Liquid Glass Examples* gallery; everything is re-implemented in Direct2D (see `src/client/screen/ios/IosGlass.cpp`).
 - **Glass HUD.** HUD plates (text modules, keystrokes) get a glass sheen and specular rim; the HUD editor, snap lines
   and notification banners use the same design language.
+- **Launcher.** `Ma4Launcher.exe` is an iOS lock-screen styled window (date, big clock, **Ma4** title, glass buttons over
+  a wallpaper you can choose) that starts Minecraft and loads `ma4.dll`. See [Launcher](#launcher).
 - **Typography.** SF Pro is used automatically when it is installed, otherwise Segoe UI Variable / Segoe UI.
 - **Replay (beta).** A data recorder (your path, nearby players / mobs, markers, **terrain map**) and a Replay page
   with a top-down viewer: map, timeline scrubber with markers, play / pause, 0.5x - 4x speed, pan / zoom, and a
@@ -79,8 +85,31 @@ out/build/x64-release/ma4.dll
 | `x64-relwithdebinfo` | `ma4.dll` and `ma4.pdb`                 | Optimized build with debugging information   |
 | `x64-nightly`        | `ma4Nightly.dll` and `ma4Nightly.pdb`   | Experimental configuration                   |
 
-Inject the DLL into `Minecraft.Windows.exe` with the injector of your choice. The supported game version is listed in
+The same build also writes `Ma4Launcher.exe` next to `ma4.dll` (see [Launcher](#launcher)). You can load the DLL into
+`Minecraft.Windows.exe` with it or with any injector of your choice. The supported game version is listed in
 `src/client/Ma4.h` (`supportedMinecraftVersions`).
+
+## Launcher
+
+`Ma4Launcher.exe` (sources in [`launcher/`](launcher)) is a small native window in the style of the iOS lock screen: the
+date, a big clock, the **Ma4** title and Liquid Glass buttons over a wallpaper. Keep it in the folder of `ma4.dll`.
+
+- **Play** starts Minecraft Bedrock, waits for the game to create its renderer, then loads `ma4.dll` into it. If the game
+  is already running the button says **Inject**; when ma4 is loaded it says **Active**. The status chip under the title
+  says what is going on, or what went wrong.
+- **Settings** (the gear): choose a **wallpaper** picture (it is copied to `%LocalAppData%\ma4\Launcher`, *Reset* goes
+  back to the built-in aurora), **dim** and **blur** it, pick a 12 / 24 hour clock, close the launcher after launching,
+  or point it to a `ma4.dll` somewhere else. The glass controls show a blurred copy of the wallpaper behind them.
+- The window is dragged by the wallpaper, resizable, DPI aware, and uses almost no CPU while idle. The UI is Japanese or
+  English depending on Windows.
+- It needs no admin rights. To let the sandboxed game read the DLL it adds read / execute for *ALL APPLICATION
+  PACKAGES* to `ma4.dll` itself (nothing else is touched).
+- Command line: `Ma4Launcher.exe --inject <pid> <dll>` loads a DLL into a process;
+  `Ma4Launcher.exe --render out.png [W H] [--sheet] [--state idle|running|ready|error|busy] [--wallpaper file]`
+  draws one frame to a PNG without opening a window (how the screenshots above were made).
+
+Not verified inside the real game: starting Minecraft and loading the DLL are the standard activation / `LoadLibraryW`
+mechanisms and were tested against an ordinary process, but the launcher has not been run against the live game.
 
 ## Replay (beta)
 
@@ -88,7 +117,7 @@ The recorder is a **read-only data recorder**: every game tick it stores your po
 mobs around you (up to 40 within 64 blocks) plus markers you drop. It also samples the **terrain map**: the top block of
 every column around you (colour + height, nearest chunks first, radius configurable in *Modules > Replay*), which the
 viewer draws as a top-down map with hill shading (toggle with the **Map** button). Recordings are written to
-`%AppData%\Roaming\ma4\Replays\*.ma4replay` when you stop (or when the maximum length is reached / you leave the
+`%LocalAppData%\ma4\Replays\*.ma4replay` when you stop (or when the maximum length is reached / you leave the
 world).
 
 - Start / stop from the **Replay** tab of the menu, or bind a key in *Modules > Replay*.
@@ -113,7 +142,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the version history.
 
 ## Data folder
 
-`%AppData%\Roaming\ma4` contains `Configs`, `Plugins`, `Logs`, `Replays`, `Assets` (ChakraCore for plugins). Delete the
+`%LocalAppData%\ma4` contains `Configs`, `Plugins`, `Logs`, `Replays`, `Assets` (ChakraCore for plugins). Delete the
 folder to reset ma4 completely.
 
 ## Discord Presence
