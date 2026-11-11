@@ -260,7 +260,7 @@ static void buildFrame(Frame& f, Env& e, bool hudPreview) {
     f.replay.toggleRecording = [] {};
     f.replay.addMarker = [] {};
     f.replay.remove = [](uint64_t) {};
-    f.version = L"v1.0.4";
+    f.version = L"v1.0.5";
     f.str.appName = L"ma4";
     f.logo = e.logo.Get();
     struct M {
@@ -447,6 +447,9 @@ static void buildFrame(Frame& f, Env& e, bool hudPreview) {
     f.openHudEditor = [] {};
 }
 
+static std::wstring g_search;
+static bool g_press = false;
+
 static void renderScenario(Env& e, const wchar_t* out, bool light, bool bright, Section sec, bool detail, int popover,
                            bool colorSheet, float mouseX, float mouseY, float scroll, int frames = 90, bool preview = true,
                            bool rtl = false) {
@@ -455,6 +458,12 @@ static void renderScenario(Env& e, const wchar_t* out, bool light, bool bright, 
     buildFrame(f, e, preview);
     shell.reset(true);
     shell.selectSection(sec);
+    if (!g_search.empty()) {
+        auto se = shell.searchEdit();
+        se->setText(g_search);
+        se->setSelected(true);
+        se->setCaretLocation(static_cast<int>(g_search.size()));
+    }
 
     Ui& ui = Ui::get();
     ui.releaseDeviceResources();
@@ -483,6 +492,8 @@ static void renderScenario(Env& e, const wchar_t* out, bool light, bool bright, 
         Input in;
         in.mouse = Vec2(mouseX, mouseY);
         in.dt = 1.f / 60.f;
+        in.down = g_press && i >= frames - 14;
+        in.pressed = g_press && i == frames - 14;
         in.wheel = (i == frames - 40) ? scroll : 0.f;
         ui.beginFrame(g, in, pal, scale, rtl);
         if (popover >= 0 && !didPop && i == frames - 30) {
@@ -558,5 +569,12 @@ int wmain(int argc, wchar_t** argv) {
     g_replayViewer = true;
     renderScenario(e, p(L"13_replay_viewer.png").c_str(), false, false, Section::Replay, false, -1, false, 1500, 900, 0, 120);
     renderScenario(e, p(L"14_replay_viewer_light.png").c_str(), true, true, Section::Replay, false, -1, false, 1500, 900, 0, 120);
+    g_replayViewer = false;
+    g_search = L"c";
+    renderScenario(e, p(L"15_search_focus.png").c_str(), false, false, Section::All, false, -1, false, 1500, 900, 0);
+    g_search.clear();
+    g_press = true;
+    renderScenario(e, p(L"16_press_toggle.png").c_str(), false, false, Section::All, false, -1, false, 1486, 313, 0);
+    g_press = false;
     return 0;
 }

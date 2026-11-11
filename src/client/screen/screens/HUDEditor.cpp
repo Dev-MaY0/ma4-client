@@ -98,20 +98,23 @@ void HUDEditor::onRender(Event& ev) {
             uint64_t id = ios::Ui::hashId("hudeditor.modsettings");
             auto cr = ui.click(id, btnRect);
             float hover = ui.anim(id ^ 0x11ull, cr.hovered ? 1.f : 0.f, 0.08f);
-            float press = ui.anim(id ^ 0x22ull, cr.pressed ? 1.f : 0.f, 0.05f);
-            float sc = 1.f + 0.025f * hover - 0.03f * press;
-            D2D1::Matrix3x2F oldT;
-            ui.ctx()->GetTransform(&oldT);
-            ui.ctx()->SetTransform(D2D1::Matrix3x2F::Scale(sc, sc, D2D1::Point2F(btnRect.centerX(), btnRect.centerY())) * oldT);
+            // interactive glass: it swells and springs back when pressed, and eases in with the editor
+            float press = std::clamp(ui.pressSpring(id ^ 0x22ull, cr.pressed), 0.f, 1.2f);
+            float sc = (0.90f + 0.10f * std::min(1.f, anim)) * (1.f + 0.02f * hover + 0.07f * press);
+            ui.pushScale(btnRect, sc);
 
-            ui.materialPill(btnRect, buttonHeight * 0.5f);
+            ios::GlassStyle gs;
+            gs.press = std::min(1.f, press);
+            gs.lift = hover;
+            gs.shadow = 1.3f;
+            ui.glass(btnRect, buttonHeight * 0.5f, gs);
             d2d::Rect icon(btnRect.left + S(20.f), btnRect.centerY() - S(13.f), btnRect.left + S(20.f) + S(26.f),
                            btnRect.centerY() + S(13.f));
             ui.glyph(ios::Glyph::Sliders, icon, ui.pal.accent, 1.1f);
             ui.text(d2d::Rect(icon.right + S(10.f), btnRect.top, btnRect.right - S(20.f), btnRect.bottom),
                     LocalizeString::get("client.ui.hudEditor.modSettings.name"),
                     ios::TextStyle(ios::Font::Semibold, S(18.f), ui.pal.label, ios::HAlign::Leading, ios::VAlign::Center));
-            ui.ctx()->SetTransform(oldT);
+            ui.popScale();
 
             ui.popOpacity();
             ui.endFrame();

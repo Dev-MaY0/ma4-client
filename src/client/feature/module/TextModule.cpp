@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "TextModule.h"
+#include "GlassPlate.h"
 #include "client/feature/setting/Setting.h"
 
 void TextModule::onInit() {
@@ -84,8 +85,7 @@ void TextModule::render(DrawUtil& dc, bool isDefault, bool inEditor) {
                 dc.drawRoundedRectangle(rc, realOCol, rad, std::get<FloatValue>(outlineThickness));
             if (std::get<BoolValue>(fillBg)) {
                 dc.fillRoundedRectangle(rc, realCol, rad);
-                dc.drawRoundedRectangle(rc, d2d::Color(1.f, 1.f, 1.f, 0.10f * std::min(1.f, realCol.a * 2.f)), rad, 1.f,
-                                        DrawUtil::OutlinePosition::Inside);
+                hud::glassPlate(dc, rc, rad, realCol.a);
             }
             dc.drawText(rc, str.c_str(), realTCol, Renderer::FontSelection::SecondaryMedium, textSize, align,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER, !isDefault && !inEditor && cacheText);
@@ -104,8 +104,7 @@ void TextModule::render(DrawUtil& dc, bool isDefault, bool inEditor) {
                 dc.drawRoundedRectangle(rc, realOCol, rad, std::get<FloatValue>(outlineThickness));
             if (std::get<BoolValue>(fillBg)) {
                 dc.fillRoundedRectangle(rc, std::get<ColorValue>(bgColor).getMainColor(), rad);
-                dc.drawRoundedRectangle(rc, d2d::Color(1.f, 1.f, 1.f, 0.10f * std::min(1.f, realCol.a * 2.f)), rad, 1.f,
-                                        DrawUtil::OutlinePosition::Inside);
+                hud::glassPlate(dc, rc, rad, realCol.a);
             }
             dc.drawText(rc, str.c_str(), realTCol, Renderer::FontSelection::SecondaryMedium, textSize, align,
                         DWRITE_PARAGRAPH_ALIGNMENT_CENTER, !isDefault && !inEditor && cacheText);

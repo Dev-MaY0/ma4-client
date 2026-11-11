@@ -6,19 +6,6 @@
 #include <client/screen/ios/IosBridge.h>
 #include <cmath>
 
-namespace {
-    float easeOutBack(float t) {
-        const float c1 = 1.1f;
-        const float c3 = c1 + 1.f;
-        float u = t - 1.f;
-        return 1.f + c3 * u * u * u + c1 * u * u;
-    }
-
-    float easeInCubic(float t) {
-        return t * t * t;
-    }
-} // namespace
-
 Notifications::Notifications() {
     Eventing::get().listen<RenderOverlayEvent>(this, (EventListenerFunc)&Notifications::onRender, 10);
 }
@@ -47,21 +34,20 @@ void Notifications::onRender(Event& evG) {
     float dur = static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(now - toast.createTime).count());
     float maxDur = stayMs + transitionMs * 2.f;
 
-    float shown; // 0 = hidden above the screen, 1 = resting position
+    // 0 = hidden above the screen, 1 = resting position. The banner drops in on a spring (response 0.46, damping
+    // 0.7: a small overshoot, like a system banner) and leaves the same way.
     float opacity = 1.f;
-    if (dur < transitionMs) {
-        float t = dur / transitionMs;
-        shown = easeOutBack(t);
-        opacity = std::min(1.f, t * 2.f);
-    } else if (dur > maxDur - transitionMs) {
-        float t = std::clamp((dur - (maxDur - transitionMs)) / transitionMs, 0.f, 1.f);
-        shown = 1.f - easeInCubic(t);
-        opacity = 1.f - t;
-    } else {
-        shown = 1.f;
+    const bool leaving = dur > maxDur - transitionMs;
+    if (leaving) {
+        opacity = 1.f - std::clamp((dur - (maxDur - transitionMs)) / transitionMs, 0.f, 1.f);
+    } else if (dur < transitionMs) {
+        opacity = std::min(1.f, dur / transitionMs * 2.f);
     }
 
     auto& ui = ios::beginGameFrame();
+    static const uint64_t kBannerSpring = ios::Ui::hashId("ma4.banner");
+    if (dur < 40.f) ui.springSet(kBannerSpring, 0.f);
+    float shown = ui.spring(kBannerSpring, leaving ? 0.f : 1.f, 0.46f, 0.70f);
     auto S = [&](float v) { return ui.S(v); };
     auto ss = Ma4::getRenderer().getScreenSize();
 
@@ -78,7 +64,11 @@ void Notifications::onRender(Event& evG) {
     ios::Rect pill(std::round(x), y, std::round(x) + w, y + h);
 
     ui.pushOpacity(pill, opacity);
-    ui.materialPill(pill, h * 0.5f);
+    {
+        ios::GlassStyle gs;
+        gs.shadow = 1.3f;
+        ui.glass(pill, h * 0.5f, gs);
+    }
     ios::Rect icon(pill.left + S(12.f), pill.centerY() - iconS * 0.5f, pill.left + S(12.f) + iconS,
                    pill.centerY() + iconS * 0.5f);
     if (auto* logo = Ma4::getAssets().ma4Logo.getBitmap()) {

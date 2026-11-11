@@ -1,4 +1,5 @@
 #include "IosShell.h"
+#include "IosShellCommon.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,18 +13,21 @@ namespace ios {
         // ---- layout constants (iOS points) ----
         constexpr float kWinW = 1040.f;
         constexpr float kWinH = 660.f;
-        constexpr float kSidebarW = 252.f;
-        constexpr float kNavH = 52.f;
-        constexpr float kMargin = 20.f;
-        constexpr float kGroupR = 12.f;
-        constexpr float kRowH = 44.f;
-        constexpr float kModRowH = 56.f;
+        constexpr float kSidebarW = 252.f; // width of the floating glass sidebar panel
+        constexpr float kInset = 10.f;     // gap between the window edge and the floating sidebar
+        constexpr float kWinR = 36.f;      // window corner radius; the sidebar radius is concentric (kWinR - kInset)
+        constexpr float kModRowH = 58.f;
 
         constexpr uint64_t kIdOpen = 0x0A110001ull;
-        constexpr uint64_t kIdPush = 0x0A110002ull;
         constexpr uint64_t kIdPop = 0x0A110003ull;
         constexpr uint64_t kIdSheet = 0x0A110004ull;
         constexpr uint64_t kIdSearch = 0x0A110005ull;
+        constexpr uint64_t kIdOpenSpring = 0x0A110006ull;
+        constexpr uint64_t kIdSelTop = 0x0A110007ull;
+        constexpr uint64_t kIdSearchFocus = 0x0A110008ull;
+        constexpr uint64_t kIdSheetDrag = 0x0A110009ull;
+        constexpr uint64_t kIdSheetDragSpring = 0x0A11000Aull;
+        constexpr uint64_t kIdPopSpring = 0x0A11000Bull;
 
         std::wstring widen(std::string const& s) {
             return std::wstring(s.begin(), s.end());
@@ -196,8 +200,10 @@ namespace ios {
             }
         }
 
-        Col solidBase(Ui& ui) {
-            return ui.pal.dark ? Col(0.105f, 0.105f, 0.118f, 1.f) : Col(0.949f, 0.949f, 0.969f, 1.f);
+        /// The floating glass sidebar panel inside the window.
+        Rect sidebarPanel(Ui& ui, Rect const& win) {
+            float inset = ui.S(kInset);
+            return Rect(win.left + inset, win.top + inset, win.left + inset + ui.S(kSidebarW), win.bottom - inset);
         }
     } // namespace
 
@@ -338,11 +344,13 @@ namespace ios {
     // ======================================================================================== frame
     bool Shell::frame(Ui& ui, Rect const& screen, Frame& f, bool active) {
         closing_ = !active;
+        const bool restartSpring = openRestart_ == 1;
         if (openRestart_ == 1) {
             ui.animSet(kIdOpen, 0.f);
             openRestart_ = 0;
         } else if (openRestart_ == 2) {
             ui.animSet(kIdOpen, 1.f);
+            ui.springSet(kIdOpenSpring, 1.f);
             openRestart_ = 0;
         }
         float open = ui.animFrom(kIdOpen, 0.f, active ? 1.f : 0.f, active ? 0.08f : 0.06f);
@@ -355,8 +363,14 @@ namespace ios {
         }
 
         win_ = computeWindow(screen, ui.scale);
-        const float R = ui.S(28.f);
+        const float R = ui.S(kWinR);
         const bool animating = open < 0.985f || !active;
+
+        // the window pops in with a spring (response 0.5 / damping 0.8: a hair of overshoot, like a sheet presenting)
+        if (restartSpring) {
+            ui.springSet(kIdOpenSpring, 0.f);
+        }
+        float pop = ui.spring(kIdOpenSpring, active ? 1.f : 0.f, 0.50f, 0.80f);
 
         // search text changes reset scroll
         {
@@ -374,36 +388,46 @@ namespace ios {
 
         D2D1::Matrix3x2F oldTransform;
         ui.ctx()->GetTransform(&oldTransform);
-        float popScale = 0.955f + 0.045f * open;
+        float popScale = 0.925f + 0.075f * pop;
         ui.ctx()->SetTransform(D2D1::Matrix3x2F::Scale(popScale, popScale, D2D1::Point2F(win_.centerX(), win_.centerY())) *
                                D2D1::Matrix3x2F(oldTransform));
         ui.pushOpacity(screen, open);
 
         claimedFocus_ = false;
 
-        // window material
-        ui.shadow(win_, R, ui.S(46.f), ui.S(20.f), Col(0.f, 0.f, 0.f, ui.pal.dark ? 0.55f : 0.28f));
+        // window: a large glass sheet
+        ui.shadow(win_, R, ui.S(56.f), ui.S(24.f), Col(0.f, 0.f, 0.f, ui.pal.dark ? 0.58f : 0.30f));
         ui.fillSmooth(win_, R, ui.pal.windowFill);
+        {
+            GlassStyle ws;
+            ws.clear = true;
+            ws.shadow = 0.f;
+            ws.backing = 0.f;
+            ui.glass(win_, R, ws);
+        }
 
         ui.pushClipRRect(win_, R);
         const float sideW = ui.S(kSidebarW);
-        Rect sidebarR(win_.left, win_.top, win_.left + sideW, win_.bottom);
-        ui.fillRect(sidebarR, ui.pal.sidebarFill);
-        ui.hairlineV(sidebarR.right, win_.top, win_.bottom, ui.pal.separator);
+        Rect panel = sidebarPanel(ui, win_);
+        {
+            // floating sidebar: concentric corners, its own glass
+            GlassStyle ss;
+            ss.shadow = 0.55f;
+            ss.backing = 0.f;
+            ui.glass(panel, R - ui.S(kInset), ss);
+        }
 
         const bool overlay = pop_.open || sheet_.open;
         ui.lockInput(animating || overlay);
 
         drawSidebar(ui, f, win_, sideW);
-        Rect content(win_.left + sideW + std::max(1.f, std::round(ui.scale * 0.5f)), win_.top, win_.right, win_.bottom);
+        Rect content(panel.right, win_.top, win_.right, win_.bottom);
         drawContent(ui, f, content);
 
         ui.lockInput(animating);
         drawPopover(ui, win_);
         drawColorSheet(ui, f, win_);
         ui.popClipRRect();
-
-        ui.strokeSmooth(win_, R, ui.pal.windowBorder, std::max(1.f, ui.S(0.75f)));
 
         ui.popOpacity();
         ui.ctx()->SetTransform(oldTransform);
@@ -417,43 +441,25 @@ namespace ios {
     }
 
     // ======================================================================================== sidebar
-    void Shell::drawSidebar(Ui& ui, Frame& f, Rect const& win, float sideW) {
+    void Shell::drawSidebar(Ui& ui, Frame& f, Rect const& win, float /*sideW*/) {
         auto S = [&](float v) { return ui.S(v); };
         const Palette& pal = ui.pal;
-        const float x0 = win.left, y0 = win.top;
+        Rect panel = sidebarPanel(ui, win);
+        const float x0 = panel.left, y0 = panel.top;
+        const float panelW = panel.getWidth();
         const float pad = S(16.f);
 
         // brand header
-        Rect logo(x0 + S(20.f), y0 + S(22.f), x0 + S(20.f) + S(42.f), y0 + S(22.f) + S(42.f));
+        Rect logo(x0 + S(18.f), y0 + S(20.f), x0 + S(18.f) + S(42.f), y0 + S(20.f) + S(42.f));
         if (f.logo) {
             ui.bitmap(f.logo, logo);
         } else {
             ui.iconTile(logo, pal.accent, L"m");
         }
-        Rect nameR(logo.right + S(11.f), logo.top - S(1.f), x0 + sideW - pad, logo.top + S(25.f));
+        Rect nameR(logo.right + S(11.f), logo.top - S(1.f), x0 + panelW - pad, logo.top + S(25.f));
         ui.text(nameR, f.str.appName, TextStyle(Font::Bold, S(22.f), pal.label, HAlign::Leading, VAlign::Center));
-        Rect verR(logo.right + S(11.f), logo.top + S(24.f), x0 + sideW - pad, logo.bottom + S(1.f));
+        Rect verR(logo.right + S(11.f), logo.top + S(24.f), x0 + panelW - pad, logo.bottom + S(1.f));
         ui.text(verR, f.version, TextStyle(Font::Regular, S(12.f), pal.secondaryLabel, HAlign::Leading, VAlign::Center));
-
-        // search field
-        auto edit = searchEdit();
-        Rect sf(x0 + pad, y0 + S(80.f), x0 + sideW - pad, y0 + S(80.f) + S(36.f));
-        TextStyle sst(Font::Regular, S(17.f), pal.label, HAlign::Leading, VAlign::Center);
-        float caretX = ui.prefixWidth(edit->getText(), static_cast<size_t>(edit->getCaretLocation()), sst);
-        bool clear = false;
-        bool clicked = ui.searchField(kIdSearch, sf, edit->getText(),
-                                      section_ == Section::Settings ? f.str.searchSettings : f.str.search,
-                                      edit->isSelected(), caretX, edit->isSelected() && edit->shouldBlink(), &clear);
-        if (clear) {
-            edit->reset();
-            edit->setSelected(true);
-            claimedFocus_ = true;
-        } else if (clicked) {
-            blurAll();
-            edit->setSelected(true);
-            edit->setCaretLocation(static_cast<int>(edit->getText().size()));
-            claimedFocus_ = true;
-        }
 
         struct Item {
             Section sec;
@@ -475,21 +481,70 @@ namespace ios {
         };
         if (f.replay.available) clientItems.push_back({ Section::Replay, 0, f.str.replay, pal.red, Glyph::Camera, L"" });
 
-        float y = sf.bottom + S(20.f);
-        auto header = [&](std::wstring const& text) {
-            ui.text(Rect(x0 + pad + S(10.f), y, x0 + sideW - pad, y + S(18.f)), text,
-                    TextStyle(Font::Semibold, S(12.f), pal.secondaryLabel, HAlign::Leading, VAlign::Center));
-            y += S(24.f);
+        // ---- layout pass (positions first, so one selection capsule can travel between rows)
+        struct Slot {
+            Item const* it;
+            Rect rr;
+            int index;
         };
-        auto row = [&](Item const& it, int index) {
-            Rect rr(x0 + S(10.f), y, x0 + sideW - S(10.f), y + S(42.f));
+        struct Head {
+            std::wstring text;
+            float y;
+        };
+        std::vector<Slot> slots;
+        std::vector<Head> heads;
+        float y = y0 + S(84.f);
+        int idx = 0;
+        auto addHeader = [&](std::wstring const& text) {
+            heads.push_back({ text, y });
+            y += S(26.f);
+        };
+        auto addItem = [&](Item const& it) {
+            slots.push_back({ &it, Rect(x0 + S(10.f), y, x0 + panelW - S(10.f), y + S(42.f)), idx++ });
+            y += S(44.f);
+        };
+        addHeader(f.str.modulesHeader);
+        for (auto& it : modulesItems) addItem(it);
+        y += S(10.f);
+        addHeader(f.str.clientHeader);
+        for (auto& it : clientItems) addItem(it);
+
+        for (auto const& h : heads) {
+            ui.text(Rect(x0 + pad + S(10.f), h.y, x0 + panelW - pad, h.y + S(18.f)), h.text,
+                    TextStyle(Font::Semibold, S(12.f), pal.secondaryLabel, HAlign::Leading, VAlign::Center));
+        }
+
+        // ---- selection capsule: tinted glass that springs to the chosen row and stretches while it travels
+        {
+            const Slot* sel = nullptr;
+            for (auto const& s : slots) {
+                if (s.it->action == 0 && s.it->sec == section_) sel = &s;
+            }
+            if (sel) {
+                float top = ui.spring(kIdSelTop, sel->rr.top, 0.42f, 0.78f);
+                float vel = ui.springVelocity(kIdSelTop);
+                float stretch = std::min(S(9.f), std::fabs(vel) * 0.022f);
+                Rect ind(sel->rr.left, top - stretch * 0.5f, sel->rr.right, top + sel->rr.getHeight() + stretch * 0.5f);
+                GlassStyle gs;
+                gs.tint = withAlpha(pal.accent, 0.92f);
+                gs.backing = 0.f;
+                gs.shadow = 0.5f;
+                ui.glass(ind, ind.getHeight() * 0.5f, gs);
+            }
+        }
+
+        for (auto const& s : slots) {
+            Item const& it = *s.it;
+            Rect const& rr = s.rr;
             bool selected = it.action == 0 && it.sec == section_;
-            uint64_t id = Ui::hashId(std::string("side") + std::to_string(index) + std::to_string(it.action));
+            uint64_t id = Ui::hashId(std::string("side") + std::to_string(s.index) + std::to_string(it.action));
             auto cr = ui.click(id, rr);
             float hoverA = ui.anim(id ^ 0x91ull, (cr.hovered && !selected) ? 1.f : 0.f, 0.07f);
-            float selA = ui.anim(id ^ 0x92ull, selected ? 1.f : 0.f, 0.08f);
-            if (hoverA > 0.01f) ui.rrect(rr, S(10.f), withAlpha(pal.label, 0.06f * hoverA + (cr.pressed ? 0.05f : 0.f)));
-            if (selA > 0.01f) ui.rrect(rr, S(10.f), mulAlpha(pal.accent, selA));
+            float selA = ui.anim(id ^ 0x92ull, selected ? 1.f : 0.f, 0.10f);
+            float pr = ui.pressSpring(id ^ 0x93ull, cr.pressed);
+            if (hoverA > 0.01f || pr > 0.01f) {
+                ui.rrect(rr, rr.getHeight() * 0.5f, withAlpha(pal.label, 0.07f * hoverA + 0.06f * clamp01(pr)));
+            }
             Rect tile(rr.left + S(10.f), rr.centerY() - S(14.f), rr.left + S(10.f) + S(28.f), rr.centerY() + S(14.f));
             if (!it.mono.empty()) {
                 ui.iconTile(tile, it.color, it.mono);
@@ -506,15 +561,46 @@ namespace ios {
                     selectSection(it.sec);
                 }
             }
-            y += S(44.f);
-        };
+        }
 
-        header(f.str.modulesHeader);
-        int idx = 0;
-        for (auto& it : modulesItems) row(it, idx++);
-        y += S(10.f);
-        header(f.str.clientHeader);
-        for (auto& it : clientItems) row(it, idx++);
+        // ---- search: a floating glass capsule at the bottom (iOS 26). While it has focus it splits off a round
+        // glass cancel button, the way the system search field does.
+        {
+            auto edit = searchEdit();
+            const bool focused = edit->isSelected();
+            const float sfH = S(44.f);
+            float fs = ui.spring(kIdSearchFocus, focused ? 1.f : 0.f, 0.36f, 0.82f);
+            float fT = clamp01(fs);
+            float shrink = std::clamp(fs, 0.f, 1.1f) * (sfH + S(8.f));
+            Rect sf(x0 + S(12.f), panel.bottom - S(12.f) - sfH, x0 + panelW - S(12.f) - shrink, panel.bottom - S(12.f));
+            TextStyle sst(Font::Regular, S(17.f), pal.label, HAlign::Leading, VAlign::Center);
+            float caretX = ui.prefixWidth(edit->getText(), static_cast<size_t>(edit->getCaretLocation()), sst);
+            bool clear = false;
+            bool clicked = ui.searchField(kIdSearch, sf, edit->getText(),
+                                          section_ == Section::Settings ? f.str.searchSettings : f.str.search, focused,
+                                          caretX, focused && edit->shouldBlink(), &clear);
+            if (fT > 0.02f) {
+                Rect cancelR(sf.right + S(8.f), sf.top, sf.right + S(8.f) + sfH, sf.bottom);
+                ui.pushOpacity(cancelR, fT);
+                bool cancel = ui.glassIconButton(Ui::hashId("sidecancel"), cancelR, Glyph::XMark, Col(0.f, 0.f, 0.f, 0.f), 0.40f, fT > 0.6f);
+                ui.popOpacity();
+                if (cancel) {
+                    edit->reset();
+                    blurAll();
+                    claimedFocus_ = true;
+                }
+            }
+            if (clear) {
+                edit->reset();
+                edit->setSelected(true);
+                claimedFocus_ = true;
+            } else if (clicked) {
+                blurAll();
+                edit->setSelected(true);
+                edit->setCaretLocation(static_cast<int>(edit->getText().size()));
+                claimedFocus_ = true;
+            }
+        }
     }
 
     // ======================================================================================== content
@@ -554,39 +640,39 @@ namespace ios {
     }
 
     void Shell::drawNavBar(Ui& ui, Frame& f, Rect const& content, std::wstring const& title, float scroll,
-                           bool showBack, std::wstring const& backTitle) {
+                           bool showBack, std::wstring const& /*backTitle*/) {
         auto S = [&](float v) { return ui.S(v); };
         const Palette& pal = ui.pal;
         Rect bar(content.left, content.top, content.right, content.top + S(kNavH));
         float t = clamp01((scroll - S(14.f)) / S(18.f));
-        if (t > 0.01f) {
-            ui.fillRect(bar, solidBase(ui).asAlpha(0.985f * t));
-            ui.hairlineH(bar.left, bar.right, bar.bottom - std::max(1.f, std::round(ui.scale * 0.5f)),
-                         mulAlpha(pal.separator, t));
+
+        // scroll edge effect: no bar, the content fades into the page colour under the floating controls
+        if (navEdge_) {
+            // solid under the floating buttons and title, then a soft fall-off into the content
+            float band = S(kNavH) + S(34.f);
+            ui.scrollEdge(Rect(content.left, content.top, content.right, content.top + band), true,
+                          solidBase(ui).asAlpha(1.f), t, S(kNavH - 6.f) / band);
         }
-        ui.text(Rect(bar.left + S(120.f), bar.top, bar.right - S(120.f), bar.bottom), title,
+
+        // inline title appears once the large title has scrolled away
+        ui.text(Rect(bar.left + S(76.f), bar.top, bar.right - S(76.f), bar.bottom), title,
                 TextStyle(Font::Semibold, S(17.f), withAlpha(pal.label, t), HAlign::Center, VAlign::Center));
 
-        // close button
-        Rect closeR(bar.right - S(16.f) - S(30.f), bar.centerY() - S(15.f), bar.right - S(16.f), bar.centerY() + S(15.f));
-        if (ui.iconButton(Ui::hashId("navclose") ^ (showBack ? 0x1111ull : 0x2222ull), closeR, Glyph::XMark, true)) {
+        const float d = S(kBtnD);
+        const float cy = bar.top + S(kNavH) * 0.5f;
+
+        // floating glass close button (trailing)
+        Rect closeR(bar.right - S(16.f) - d, cy - d * 0.5f, bar.right - S(16.f), cy + d * 0.5f);
+        if (ui.glassIconButton(Ui::hashId("navclose") ^ (showBack ? 0x1111ull : 0x2222ull), closeR, Glyph::XMark,
+                               Col(0.f, 0.f, 0.f, 0.f), 0.40f)) {
             if (f.closeWindow) f.closeWindow();
         }
 
+        // floating glass back button (leading): just a chevron in a circle, like the iOS 26 navigation bar
         if (showBack) {
-            float tw = ui.textWidth(backTitle, TextStyle(Font::Regular, S(17.f), pal.accent));
-            Rect backR(bar.left + S(10.f), bar.centerY() - S(18.f), bar.left + S(10.f) + S(26.f) + tw + S(10.f),
-                       bar.centerY() + S(18.f));
+            Rect backR(bar.left + S(16.f), cy - d * 0.5f, bar.left + S(16.f) + d, cy + d * 0.5f);
             uint64_t id = Ui::hashId("navback") ^ static_cast<uint64_t>(content.left);
-            auto cr = ui.click(id, backR);
-            float press = ui.anim(id ^ 0x77ull, cr.pressed ? 1.f : 0.f, 0.05f);
-            Col c = mulAlpha(pal.accent, 1.f - 0.55f * press);
-            ui.glyph(Glyph::ChevronLeft, Rect(backR.left + S(4.f), backR.centerY() - S(10.f), backR.left + S(22.f),
-                                              backR.centerY() + S(10.f)),
-                     c, 1.25f);
-            ui.text(Rect(backR.left + S(24.f), backR.top, backR.right, backR.bottom), backTitle,
-                    TextStyle(Font::Regular, S(17.f), c, HAlign::Leading, VAlign::Center));
-            if (cr.clicked) detailOpen_ = false;
+            if (ui.glassIconButton(id, backR, Glyph::ChevronLeft, Col(0.f, 0.f, 0.f, 0.f), 0.46f)) detailOpen_ = false;
         }
     }
 
@@ -600,7 +686,7 @@ namespace ios {
         const float rowH = S(kModRowH);
         Rect card(x, y, x + w, y + rowH * static_cast<float>(rows.size()));
         const bool cardVisible = card.bottom > view.top && card.top < view.bottom;
-        if (cardVisible) ui.fillSmooth(card, S(kGroupR), pal.cell);
+        if (cardVisible) drawCard(ui, card);
 
         ui.pushClipRRect(card, S(kGroupR));
         for (size_t i = 0; i < rows.size(); ++i) {
@@ -618,7 +704,7 @@ namespace ios {
             bool hasCtl = false;
             std::wstring ctlLabel;
             if (m.trailing == ModuleRow::Trailing::Toggle) {
-                ctl = Rect(right - chevW - S(51.f), rc.centerY() - S(15.5f), right - chevW, rc.centerY() + S(15.5f));
+                ctl = Rect(right - chevW - S(kSwitchW), rc.centerY() - S(kSwitchH * 0.5f), right - chevW, rc.centerY() + S(kSwitchH * 0.5f));
                 hasCtl = true;
             } else if (m.trailing == ModuleRow::Trailing::Open) {
                 ctlLabel = f.str.open;
@@ -664,7 +750,7 @@ namespace ios {
                 float tw = ui.textWidth(m.keyText, TextStyle(Font::Medium, S(14.f), pal.label));
                 Rect b(right - std::max(S(44.f), tw + S(22.f)) - S(18.f), rc.centerY() - S(14.f), right - S(18.f),
                        rc.centerY() + S(14.f));
-                ui.rrect(b, S(8.f), pal.tertiaryFill);
+                ui.rrect(b, b.getHeight() * 0.5f, pal.tertiaryFill);
                 ui.text(b, m.keyText, TextStyle(Font::Medium, S(14.f), pal.label, HAlign::Center, VAlign::Center));
                 right = b.left - S(12.f);
             } else if (m.trailing == ModuleRow::Trailing::Install || m.trailing == ModuleRow::Trailing::Installed) {
@@ -863,7 +949,7 @@ namespace ios {
         {
             const float tileS = S(64.f);
             const bool toggleable = d.hasToggle;
-            float swW = toggleable ? S(51.f) + S(16.f) : 0.f;
+            float swW = toggleable ? S(kSwitchW) + S(16.f) : 0.f;
             float textW = w - S(16.f) - tileS - S(14.f) - S(16.f) - swW;
             TextStyle ds(Font::Regular, S(14.f), pal.secondaryLabel, HAlign::Leading, VAlign::Top, true);
             float descH = 0.f; // module descriptions are not shown
@@ -872,7 +958,7 @@ namespace ios {
             float nameH = S(28.f);
             float cardH = std::max(S(88.f), S(16.f) + nameH + (descH > 0.f ? S(4.f) + descH : 0.f) + S(16.f));
             Rect card(x, y, x + w, y + cardH);
-            ui.fillSmooth(card, S(kGroupR), pal.cell);
+            drawCard(ui, card);
             Rect tile(card.left + S(16.f), card.centerY() - tileS * 0.5f, card.left + S(16.f) + tileS,
                       card.centerY() + tileS * 0.5f);
             std::wstring mono = d.name.empty() ? L"?" : std::wstring(1, static_cast<wchar_t>(std::towupper(d.name[0])));
@@ -887,8 +973,8 @@ namespace ios {
                 ui.text(Rect(tx, top + nameH + S(4.f), tx + textW, top + nameH + S(4.f) + descH), d.desc, ds);
             }
             if (toggleable) {
-                Rect sw(card.right - S(16.f) - S(51.f), card.centerY() - S(15.5f), card.right - S(16.f),
-                        card.centerY() + S(15.5f));
+                Rect sw(card.right - S(16.f) - S(kSwitchW), card.centerY() - S(kSwitchH * 0.5f), card.right - S(16.f),
+                        card.centerY() + S(kSwitchH * 0.5f));
                 bool v = d.enabled;
                 if (ui.toggle(Ui::idOf(&detailId_, 0xDE7A11ull), sw, v, interactive)) {
                     if (d.setEnabled) d.setEnabled(v);
@@ -901,7 +987,7 @@ namespace ios {
         if (d.hasPreview) {
             float ph = std::max(S(120.f), d.previewSize.y * 1.0f + S(56.f));
             Rect card(x, y, x + w, y + ph);
-            ui.fillSmooth(card, S(kGroupR), pal.cell);
+            drawCard(ui, card);
             if (d.drawPreview && card.bottom > content.top && card.top < content.bottom) {
                 ui.pushClipRRect(card, S(kGroupR));
                 d.drawPreview(card);
@@ -918,7 +1004,7 @@ namespace ios {
         // ---- reset
         if (d.reset) {
             Rect card(x, y, x + w, y + S(kRowH));
-            ui.fillSmooth(card, S(kGroupR), pal.cell);
+            drawCard(ui, card);
             uint64_t id = Ui::idOf(&detailId_, 0x4E5E7ull);
             auto cr = ui.click(id, card, interactive);
             if (cr.pressed) {
@@ -959,7 +1045,7 @@ namespace ios {
         float labelW;
         switch (r.kind) {
         case SettingRow::Kind::Toggle:
-            labelW = w - pad - S(51.f) - S(12.f) - pad;
+            labelW = w - pad - S(kSwitchW) - S(12.f) - pad;
             break;
         case SettingRow::Kind::Key:
             labelW = w - pad - S(110.f) - pad;
@@ -1017,7 +1103,7 @@ namespace ios {
         Rect card(x, y, x + w, y + total);
         const bool visible = card.bottom > view.top - S(8.f) && card.top < view.bottom + S(8.f);
         if (visible) {
-            ui.fillSmooth(card, S(kGroupR), pal.cell);
+            drawCard(ui, card);
             ui.pushClipRRect(card, S(kGroupR));
             float ry = y;
             for (size_t i = 0; i < rows.size(); ++i) {
@@ -1053,7 +1139,7 @@ namespace ios {
         switch (r.kind) {
         case SettingRow::Kind::Toggle: {
             if (!r.boolean) return;
-            Rect sw(inner.right - S(51.f), rc.centerY() - S(15.5f), inner.right, rc.centerY() + S(15.5f));
+            Rect sw(inner.right - S(kSwitchW), rc.centerY() - S(kSwitchH * 0.5f), inner.right, rc.centerY() + S(kSwitchH * 0.5f));
             drawLabel(ui, Rect(inner.left, rc.top, sw.left - S(12.f), rc.bottom), r.title, r.subtitle);
             bool v = *r.boolean;
             if (ui.toggle(r.id, sw, v, interactive)) {
@@ -1095,13 +1181,13 @@ namespace ios {
             if (editing) {
                 vs.h = HAlign::Center;
                 if (ui.textField(r.id ^ 0x7E5ull, vr, edit->getText(), true, static_cast<size_t>(edit->getCaretLocation()),
-                                 edit->shouldBlink(), vs, S(8.f))) {
+                                 edit->shouldBlink(), vs, vr.getHeight() * 0.5f)) {
                     claimedFocus_ = true;
                 }
                 if (ui.in.pressed && !vr.contains(ui.mouse())) edit->setSelected(false);
             } else {
                 auto cr = ui.click(r.id ^ 0x7E6ull, vr, interactive);
-                if (cr.hovered) ui.rrect(vr, S(8.f), withAlpha(pal.label, 0.06f));
+                if (cr.hovered) ui.rrect(vr, vr.getHeight() * 0.5f, withAlpha(pal.label, 0.06f));
                 ui.text(Rect(vr.left, vr.top, vr.right - S(4.f), vr.bottom), valueStr, vs);
                 if (cr.clicked) {
                     blurAll();
@@ -1164,8 +1250,8 @@ namespace ios {
 
             auto cr = ui.click(r.id, chip, interactive);
             float hot = ui.anim(r.id ^ 0x40Full, (capturing || cr.hovered) ? 1.f : 0.f, 0.07f);
-            ui.rrect(chip, S(8.f), mix(pal.tertiaryFill, pal.fill, 0.6f * hot));
-            if (capturing) ui.rrectStroke(chip, S(8.f), pal.accent, std::max(1.5f, S(1.5f)));
+            ui.rrect(chip, chip.getHeight() * 0.5f, mix(pal.tertiaryFill, pal.fill, 0.6f * hot));
+            if (capturing) ui.rrectStroke(chip, chip.getHeight() * 0.5f, pal.accent, std::max(1.5f, S(1.5f)));
             ui.text(chip, label, ks);
             if (cr.clicked && !capturing) {
                 blurAll();
@@ -1209,7 +1295,7 @@ namespace ios {
             drawLabel(ui, Rect(inner.left, rc.top, field.left - S(12.f), rc.bottom), r.title, r.subtitle);
             TextStyle ts(Font::Regular, S(16.f), pal.label, HAlign::Leading, VAlign::Center);
             if (ui.textField(r.id, field, edit->getText(), edit->isSelected(),
-                             static_cast<size_t>(edit->getCaretLocation()), edit->shouldBlink(), ts, S(9.f)) &&
+                             static_cast<size_t>(edit->getCaretLocation()), edit->shouldBlink(), ts, field.getHeight() * 0.5f) &&
                 interactive) {
                 blurAll();
                 edit->setSelected(true);
@@ -1247,8 +1333,10 @@ namespace ios {
     void Shell::drawPopover(Ui& ui, Rect const& win) {
         auto S = [&](float v) { return ui.S(v); };
         const Palette& pal = ui.pal;
-        float a = ui.anim(kIdPop, pop_.open ? 1.f : 0.f, 0.05f);
+        float sp = ui.spring(kIdPopSpring, pop_.open ? 1.f : 0.f, 0.34f, 0.80f);
+        float a = clamp01(sp);
         if (a < 0.01f) return;
+        const float PR = S(22.f);
 
         const int n = static_cast<int>(pop_.options.size());
         const float rowH = S(44.f);
@@ -1272,7 +1360,7 @@ namespace ios {
 
         D2D1::Matrix3x2F old;
         ui.ctx()->GetTransform(&old);
-        float sc = 0.90f + 0.10f * a;
+        float sc = 0.82f + 0.18f * sp;
         D2D1_POINT_2F origin = D2D1::Point2F(pr.right, below ? pr.top : pr.bottom);
         ui.ctx()->SetTransform(D2D1::Matrix3x2F::Scale(sc, sc, origin) * D2D1::Matrix3x2F(old));
         ui.pushOpacity(pr, a);
@@ -1280,9 +1368,13 @@ namespace ios {
         const bool interactive = pop_.open && a > 0.85f;
         ui.lockInput(!interactive);
 
-        ui.shadow(pr, S(14.f), S(28.f), S(10.f), Col(0.f, 0.f, 0.f, pal.dark ? 0.5f : 0.22f));
-        ui.fillSmooth(pr, S(14.f), pal.dark ? Col(0.17f, 0.17f, 0.18f, 0.97f) : Col(0.98f, 0.98f, 0.99f, 0.97f));
-        ui.strokeSmooth(pr, S(14.f), pal.materialBorder, std::max(1.f, S(0.75f)));
+        {
+            // menu: regular glass with a little extra frost so the labels stay legible over the page
+            GlassStyle gs;
+            gs.shadow = 1.4f;
+            ui.glass(pr, PR, gs);
+            ui.fillSmooth(pr, PR, pal.dark ? Col(0.13f, 0.13f, 0.145f, 0.72f) : Col(0.985f, 0.985f, 0.995f, 0.66f));
+        }
 
         float maxScroll = std::max(0.f, contentH - h);
         if (interactive && ui.in.wheel != 0.f && pr.contains(ui.mouse())) {
@@ -1290,14 +1382,14 @@ namespace ios {
         }
         pop_.scroll = std::clamp(pop_.scroll, 0.f, maxScroll);
 
-        ui.pushClipRRect(pr, S(14.f));
+        ui.pushClipRRect(pr, PR);
         int picked = -1;
         for (int i = 0; i < n; ++i) {
             Rect rr(pr.left, pr.top + rowH * static_cast<float>(i) - pop_.scroll, pr.right,
                     pr.top + rowH * static_cast<float>(i + 1) - pop_.scroll);
             if (rr.bottom < pr.top || rr.top > pr.bottom) continue;
             auto cr = ui.click(Ui::hashId("popopt") ^ static_cast<uint64_t>(i), rr, interactive);
-            if (cr.hovered || cr.pressed) ui.fillRect(rr, withAlpha(pal.label, cr.pressed ? 0.12f : 0.07f));
+            if (cr.hovered || cr.pressed) ui.rrect(inset(rr, S(8.f), S(2.f)), S(16.f), withAlpha(pal.label, cr.pressed ? 0.12f : 0.07f));
             bool sel = i == pop_.selected;
             ui.text(Rect(rr.left + S(18.f), rr.top, rr.right - S(44.f), rr.bottom), pop_.options[static_cast<size_t>(i)],
                     TextStyle(sel ? Font::Semibold : Font::Regular, S(17.f), pal.label, HAlign::Leading, VAlign::Center));
@@ -1306,7 +1398,7 @@ namespace ios {
                          pal.accent, 1.15f);
             }
             if (i + 1 < n) {
-                ui.hairlineH(rr.left + S(18.f), rr.right, rr.bottom - std::max(1.f, std::round(ui.scale * 0.5f)), pal.separator);
+                ui.hairlineH(rr.left + S(18.f), rr.right - S(18.f), rr.bottom - std::max(1.f, std::round(ui.scale * 0.5f)), pal.separator);
             }
             if (cr.clicked) picked = i;
         }
@@ -1342,38 +1434,75 @@ namespace ios {
     void Shell::drawColorSheet(Ui& ui, Frame& f, Rect const& win) {
         auto S = [&](float v) { return ui.S(v); };
         const Palette& pal = ui.pal;
-        float a = ui.anim(kIdSheet, sheet_.open ? 1.f : 0.f, 0.06f);
+        float sp = ui.spring(kIdSheet, sheet_.open ? 1.f : 0.f, 0.46f, 0.84f);
+        float a = clamp01(sp);
         if (a < 0.01f) return;
         const bool interactive = sheet_.open && a > 0.9f;
         ui.lockInput(!interactive);
 
         // scrim
-        ui.fillRect(win, Col(0.f, 0.f, 0.f, 0.42f * a));
+        ui.fillRect(win, Col(0.f, 0.f, 0.f, 0.34f * a));
 
-        const float sw = S(392.f);
-        const float pad = S(20.f);
-        const float headH = S(56.f);
+        const float sw = std::min(S(420.f), win.getWidth() - S(24.f));
+        const float pad = S(22.f);
+        const float headH = S(68.f);
         const float svH = S(190.f);
-        float sheetH = headH + S(10.f) + S(44.f) + S(16.f) + svH + S(18.f) + S(26.f) + S(16.f) + S(26.f) + S(20.f);
+        float sheetH = headH + S(8.f) + S(44.f) + S(16.f) + svH + S(18.f) + S(26.f) + S(16.f) + S(26.f) + S(22.f);
         if (sheet_.hasRgb) sheetH += S(52.f);
-        Rect sr(win.centerX() - sw * 0.5f, win.centerY() - sheetH * 0.5f + (1.f - a) * S(34.f),
-                win.centerX() + sw * 0.5f, win.centerY() + sheetH * 0.5f + (1.f - a) * S(34.f));
+        // floating bottom sheet: rises with a spring, follows a pull-down on the header
+        float dragShown = ui.spring(kIdSheetDragSpring, sheet_.dragOff, 0.18f, 0.92f);
+        float rise = (1.f - sp) * (sheetH + S(40.f));
+        const float bottom = win.bottom - S(12.f) + rise + dragShown;
+        Rect sr(win.centerX() - sw * 0.5f, bottom - sheetH, win.centerX() + sw * 0.5f, bottom);
 
+        const float SR = S(34.f);
         ui.pushOpacity(sr, a);
-        ui.shadow(sr, S(26.f), S(40.f), S(16.f), Col(0.f, 0.f, 0.f, 0.5f));
-        ui.fillSmooth(sr, S(26.f), pal.dark ? Col(0.14f, 0.14f, 0.155f, 0.985f) : Col(0.97f, 0.97f, 0.985f, 0.985f));
-        ui.strokeSmooth(sr, S(26.f), pal.materialBorder, std::max(1.f, S(0.75f)));
-
-        // header
-        ui.text(Rect(sr.left + S(80.f), sr.top, sr.right - S(80.f), sr.top + headH),
-                sheet_.title.empty() ? f.str.color : sheet_.title,
-                TextStyle(Font::Semibold, S(17.f), pal.label, HAlign::Center, VAlign::Center));
-        Rect doneR(sr.right - S(16.f) - S(70.f), sr.top + S(10.f), sr.right - S(16.f), sr.top + headH - S(10.f));
-        if (ui.button(Ui::hashId("sheetdone"), doneR, f.str.done, ButtonKind::Plain, 17.f, interactive)) {
-            sheet_.open = false;
-            blurAll();
+        {
+            GlassStyle gs;
+            gs.shadow = 1.6f;
+            ui.glass(sr, SR, gs);
+            ui.fillSmooth(sr, SR, pal.dark ? Col(0.12f, 0.12f, 0.135f, 0.86f) : Col(0.985f, 0.985f, 0.995f, 0.80f));
         }
-        ui.hairlineH(sr.left, sr.right, sr.top + headH, pal.separator);
+        // grabber
+        ui.rrect(Rect(sr.centerX() - S(18.f), sr.top + S(7.f), sr.centerX() + S(18.f), sr.top + S(12.f)), S(2.5f),
+                 pal.tertiaryLabel);
+
+        // header: circular glass close (leading) + prominent confirm (trailing), title between them
+        {
+            const float bd = S(40.f);
+            Rect xR(sr.left + S(16.f), sr.top + S(16.f), sr.left + S(16.f) + bd, sr.top + S(16.f) + bd);
+            Rect okR(sr.right - S(16.f) - bd, xR.top, sr.right - S(16.f), xR.bottom);
+            ui.text(Rect(sr.left + S(70.f), xR.top, sr.right - S(70.f), xR.bottom),
+                    sheet_.title.empty() ? f.str.color : sheet_.title,
+                    TextStyle(Font::Semibold, S(17.f), pal.label, HAlign::Center, VAlign::Center));
+            bool close = false;
+            if (ui.glassIconButton(Ui::hashId("sheetclose"), xR, Glyph::XMark, Col(0.f, 0.f, 0.f, 0.f), 0.40f, interactive)) close = true;
+            if (ui.glassIconButton(Ui::hashId("sheetdone"), okR, Glyph::Check, withAlpha(pal.accent, 0.93f), 0.46f, interactive)) close = true;
+            if (close) {
+                sheet_.open = false;
+                sheet_.dragOff = 0.f;
+                blurAll();
+            }
+
+            // the rest of the header is a drag handle (registered after the buttons so they win the press)
+            auto d = ui.drag(kIdSheetDrag, Rect(sr.left, sr.top, sr.right, sr.top + headH));
+            if (interactive) {
+                if (d.began) {
+                    sheet_.dragging = true;
+                    sheet_.dragStartY = ui.mouse().y - sheet_.dragOff;
+                }
+                if (d.active && sheet_.dragging) {
+                    sheet_.dragOff = std::max(0.f, ui.mouse().y - sheet_.dragStartY);
+                } else if (sheet_.dragging && !d.active) {
+                    sheet_.dragging = false;
+                    if (sheet_.dragOff > sheetH * 0.22f) {
+                        sheet_.open = false;
+                        blurAll();
+                    }
+                    sheet_.dragOff = 0.f;
+                }
+            }
+        }
 
         bool changed = false;
         float y = sr.top + headH + S(14.f);
@@ -1425,7 +1554,7 @@ namespace ios {
         Rect hexR(pc.x + S(22.f) + S(14.f), y + S(5.f), pc.x + S(22.f) + S(14.f) + S(132.f), y + S(39.f));
         TextStyle hs(Font::Medium, S(17.f), pal.label, HAlign::Center, VAlign::Center);
         if (ui.textField(Ui::hashId("sheethex"), hexR, hex->getText(), hex->isSelected(),
-                         static_cast<size_t>(hex->getCaretLocation()), hex->shouldBlink(), hs, S(9.f)) &&
+                         static_cast<size_t>(hex->getCaretLocation()), hex->shouldBlink(), hs, hexR.getHeight() * 0.5f) &&
             interactive) {
             hex->setSelected(true);
             hex->setCaretLocation(static_cast<int>(hex->getText().size()));
@@ -1444,7 +1573,7 @@ namespace ios {
             Rect box(sr.left + pad, y, sr.right - pad, y + svH);
             float rr, gg, bb;
             hsv2rgb(sheet_.h, 1.f, 1.f, rr, gg, bb);
-            ui.pushClipRRect(box, S(12.f));
+            ui.pushClipRRect(box, S(20.f));
             fillGradient(ui, box, 0.f,
                          { D2D1_GRADIENT_STOP { 0.f, D2D1::ColorF(1.f, 1.f, 1.f, 1.f) },
                            D2D1_GRADIENT_STOP { 1.f, D2D1::ColorF(rr, gg, bb, 1.f) } },
@@ -1531,11 +1660,11 @@ namespace ios {
 
         if (sheet_.hasRgb) {
             Rect rr(sr.left + pad, y + S(2.f), sr.right - pad, y + S(2.f) + S(44.f));
-            ui.fillSmooth(rr, S(12.f), pal.cell);
+            ui.fillSmooth(rr, S(22.f), pal.cell);
             ui.text(Rect(rr.left + S(16.f), rr.top, rr.right - S(80.f), rr.bottom), f.str.rgb,
                     TextStyle(Font::Regular, S(17.f), pal.label, HAlign::Leading, VAlign::Center));
             bool v = sheet_.rgb;
-            Rect sw(rr.right - S(16.f) - S(51.f), rr.centerY() - S(15.5f), rr.right - S(16.f), rr.centerY() + S(15.5f));
+            Rect sw(rr.right - S(16.f) - S(kSwitchW), rr.centerY() - S(kSwitchH * 0.5f), rr.right - S(16.f), rr.centerY() + S(kSwitchH * 0.5f));
             if (ui.toggle(Ui::hashId("sheetrgb"), sw, v, interactive)) {
                 sheet_.rgb = v;
                 changed = true;

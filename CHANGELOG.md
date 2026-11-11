@@ -3,6 +3,31 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.0.5] - 2026-11-11
+
+### Changed
+- **The whole UI is now Liquid Glass (iOS 26).** Menu, HUD editor, HUD plates, banners and replay viewer were
+  redesigned after the screen structure, state handling and animations of the SwiftUI *Liquid Glass Examples*
+  gallery (nothing was copied: SwiftUI is not usable from C++, the ideas were rebuilt in Direct2D).
+  - **Glass material** (`Ui::glass`): soft two-layer shadow, frosted backing, lit sheen, gradient specular rim and a
+    top glint; `regular` / `clear` variants, `tint`, interactive press / hover light-up (mirrors `glassEffect`).
+  - **Springs with overshoot** (`Ui::spring`, SwiftUI `response` / `dampingFraction` model) drive the window, popovers,
+    sheets, banners, switches, sliders and the selection capsule. Interactive glass swells and bounces back on press.
+  - **Floating sidebar** with concentric corners and a single selection capsule (tinted glass) that springs to the
+    chosen row and stretches while it travels. Search is a floating glass capsule at the bottom of the sidebar; while
+    typing it splits off a round glass cancel button.
+  - **Navigation**: no bar any more. Round floating glass back / close buttons, the inline title fades in on scroll,
+    and content fades into the page colour under the controls (scroll edge effect).
+  - **Controls**: 63x28 switch with an oval knob that turns into glass while touched, 6 pt slider track with a capsule
+    knob, glass segmented control whose selection stretches, glass / prominent-glass / tinted capsule buttons,
+    capsule text fields and 24 pt grouped cards.
+  - **Popover** is a glass menu with capsule highlights; the **colour picker** is a floating bottom sheet with a
+    grabber, circular close / confirm buttons and pull-down-to-dismiss.
+  - **Replay viewer**: full-bleed map with a floating glass transport panel; the three transport buttons merge like a
+    `GlassEffectContainer` and pull apart while one is pressed; capsule scrubber knob.
+  - **HUD**: text modules and keystroke keys get the glass sheen + rim, editor name labels are glass chips, the
+    *Mod Settings* button is interactive glass, notification banners drop in on a spring.
+
 ## [1.0.4] - 2026-11-10
 
 ### Added

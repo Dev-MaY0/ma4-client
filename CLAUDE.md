@@ -31,8 +31,10 @@ CMake caches absolute paths: if this folder is moved / renamed, delete `out/` fi
 
 ## Layout
 
-- `src/client/screen/ios/` - game-independent iOS UI toolkit (`IosUi`), the Settings-app shell (`IosShell`, replay
-  pages in `IosShellReplay.cpp`), data model + text input. `IosBridge` connects it to the renderer / settings.
+- `src/client/screen/ios/` - game-independent iOS 26 "Liquid Glass" UI toolkit (`IosUi` controls, `IosGlass.cpp` glass
+  material / springs / glass buttons / scroll edge), the Settings-app shell (`IosShell`, replay pages in
+  `IosShellReplay.cpp`, shared layout in `IosShellCommon.h`), data model + text input. `IosBridge` connects it to the
+  renderer / settings. HUD plates use `feature/module/GlassPlate.h` (works with a bare device context).
 - `src/client/screen/screens/ClickGUI.*` - adapter between modules / settings / plugins and the shell.
 - `src/client/misc/ReplayStore.*`, `ReplayTerrain.*` - replay recorder, `.ma4replay` files, terrain map sampler.
 - `tools/ui-harness/` - renders every screen to PNG without Minecraft (`build.bat`, then `out\harness.exe <dir>`).

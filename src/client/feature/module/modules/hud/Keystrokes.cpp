@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Keystrokes.h"
+#include "client/feature/module/GlassPlate.h"
 #include "client/input/Keyboard.h"
 #include <array>
 #include <client/Ma4.h>
@@ -62,9 +63,9 @@ Vec2 Keystrokes::drawKeystroke(DrawUtil& ctx, Vec2 const& pos, Keystroke& stroke
                         pos.y + std::get<FloatValue>(keystrokeSize) };
     float scale =
         std::get<FloatValue>(textSize); // ctx.scaleTextInBounds(key, 1 * textSize, (front.right - front.left), 2);
-    ctx.fillRoundedRectangle(
-        front, stroke.col,
-        std::min(std::get<FloatValue>(this->radius).value, std::get<FloatValue>(keystrokeSize) / 2.f));
+    const float keyRad = std::min(std::get<FloatValue>(this->radius).value, std::get<FloatValue>(keystrokeSize) / 2.f);
+    ctx.fillRoundedRectangle(front, stroke.col, keyRad);
+    hud::glassPlate(ctx, front, keyRad, stroke.col.a);
     if (std::get<BoolValue>(border))
         ctx.drawRoundedRectangle(front, std::get<ColorValue>(borderColor).getMainColor(),
                                  std::get<FloatValue>(this->radius), std::get<FloatValue>(borderLength));
@@ -173,6 +174,7 @@ void Keystrokes::render(DrawUtil& dc, bool, bool inEditor) {
             d2d::Rect mb = { 0.f, pos.y, pos.x, pos.y + mbHeight };
             mb.right -= (mb.getWidth() / 2);
             dc.fillRoundedRectangle(mb, btn.col, rad);
+            hud::glassPlate(dc, mb, rad, btn.col.a);
 
             std::wstring str = L"LMB";
 
@@ -193,6 +195,7 @@ void Keystrokes::render(DrawUtil& dc, bool, bool inEditor) {
             mb.left += (mb.getWidth() / 2) + pad;
 
             dc.fillRoundedRectangle(mb, btn.col, rad);
+            hud::glassPlate(dc, mb, rad, btn.col.a);
             std::wstring str = L"RMB";
 
             if (std::get<BoolValue>(cps)) {
@@ -214,6 +217,7 @@ void Keystrokes::render(DrawUtil& dc, bool, bool inEditor) {
         pos.y += pad;
         d2d::Rect spaceBox = { 0.f, pos.y, pos.x, pos.y + std::get<FloatValue>(spaceSize) };
         dc.fillRoundedRectangle(spaceBox, keystrokes[5].col, rad);
+        hud::glassPlate(dc, spaceBox, rad, keystrokes[5].col.a);
         dc.flush(false);
 
         if (std::get<BoolValue>(border))
@@ -230,6 +234,7 @@ void Keystrokes::render(DrawUtil& dc, bool, bool inEditor) {
         pos.y += pad;
         d2d::Rect shiftBox = { 0.f, pos.y, pos.x, pos.y + std::get<FloatValue>(spaceSize) };
         dc.fillRoundedRectangle(shiftBox, keystrokes[4].col, rad);
+        hud::glassPlate(dc, shiftBox, rad, keystrokes[4].col.a);
         if (std::get<BoolValue>(border))
             dc.drawRoundedRectangle(shiftBox, std::get<ColorValue>(borderColor).getMainColor(), rad,
                                     std::get<FloatValue>(borderLength));

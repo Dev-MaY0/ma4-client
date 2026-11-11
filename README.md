@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/icon.png" width="128" alt="ma4 icon"></p>
 
-# ma4 Client  <small>v1.0.1</small>
+# ma4 Client  <small>v1.0.5</small>
 
 **ma4 Client** is a DLL modification for Minecraft Bedrock Edition (Windows 10/11) with an iPhone / iOS styled
 interface, 30+ customizable modules, a HUD editor, a replay recorder and a JavaScript plugin system.
@@ -24,12 +24,14 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
 ## What is different from Latite
 
 - **Renamed** to ma4 Client (DLL: `ma4.dll`, data folder: `%AppData%\Roaming\ma4`).
-- **iOS style UI.** The mod menu is rebuilt as an iPadOS "Settings app": sidebar + navigation stack, grouped inset
-  lists, UISwitch, UISlider, segmented controls, pull-down menus, a colour sheet, large collapsing titles, continuous
-  ("squircle") corners, translucent materials and spring-like motion. Dark and Light appearance, adjustable menu scale,
-  right-to-left mirroring.
-- **iOS style HUD.** HUD elements default to translucent rounded "widget" pills with a glass edge; the HUD editor,
-  snap lines and notification banners use the same design language.
+- **iOS 26 "Liquid Glass" UI.** The mod menu is an iPadOS Settings-style window: floating glass sidebar with a
+  morphing selection capsule, navigation stack with floating glass back / close buttons and a scroll edge effect,
+  grouped inset cards, an oval-knob switch, capsule sliders, glass segmented controls, a glass pull-down menu, a
+  bottom colour sheet (drag down to dismiss), continuous ("squircle") corners and springs with overshoot. Dark and Light
+  appearance, adjustable menu scale, right-to-left mirroring. The structure and motion follow the SwiftUI
+  *Liquid Glass Examples* gallery; everything is re-implemented in Direct2D (see `src/client/screen/ios/IosGlass.cpp`).
+- **Glass HUD.** HUD plates (text modules, keystrokes) get a glass sheen and specular rim; the HUD editor, snap lines
+  and notification banners use the same design language.
 - **Typography.** SF Pro is used automatically when it is installed, otherwise Segoe UI Variable / Segoe UI.
 - **Replay (beta).** A data recorder (your path, nearby players / mobs, markers, **terrain map**) and a Replay page
   with a top-down viewer: map, timeline scrubber with markers, play / pause, 0.5x - 4x speed, pan / zoom, and a

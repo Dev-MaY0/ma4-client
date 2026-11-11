@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HUDModule.h"
+#include "GlassPlate.h"
 #include <client/Ma4.h>
 
 // ---- HUD editor chrome (iOS style selection frames) ----
@@ -35,7 +36,8 @@ void HUDModule::renderPost(DrawUtil& ctx) {
     float top = rc.top - h - 6.f;
     if (top < 2.f) top = rc.bottom + 6.f;
     d2d::Rect label = { rc.centerX() - w * 0.5f, top, rc.centerX() + w * 0.5f, top + h };
-    ctx.fillRoundedRectangle(label, d2d::Color(0.11f, 0.11f, 0.12f, 0.86f), h * 0.5f);
+    ctx.fillRoundedRectangle(label, d2d::Color(0.11f, 0.11f, 0.12f, 0.84f), h * 0.5f);
+    hud::glassPlate(ctx, label, h * 0.5f, 0.84f);
     ctx.drawText(label, name, d2d::Color(1.f, 1.f, 1.f, 1.f), Renderer::FontSelection::PrimarySemibold, size,
                  DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false);
 }

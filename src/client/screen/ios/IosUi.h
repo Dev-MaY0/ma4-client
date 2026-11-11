@@ -70,6 +70,13 @@ namespace ios {
         Col switchOff, thumb;
         Col material, materialBorder, materialHighlight;
         Col shadow;
+        // ---- Liquid Glass (iOS 26) ----
+        Col grouped;                       // grouped background behind the cards (opaque)
+        Col glassBacking;                  // "frost" under a glass surface so content below stays out of the way
+        Col glassSheenTop, glassSheenBottom; // regular glass sheen (top lit, bottom dim)
+        Col clearSheenTop, clearSheenBottom; // clear glass
+        Col glassEdge;                     // outer hairline that separates glass from what is behind it
+        Col cardBorder;                    // faint inner edge of grouped cards
         Col blue, green, red, orange, yellow, pink, purple, teal, indigo, gray, mint;
         Col accent;
 
@@ -140,8 +147,30 @@ namespace ios {
         Gray,        // quaternary fill, accent label ("Installed", "Open")
         Plain,       // accent label, no background
         Destructive, // red label, no background
-        Material     // floating translucent pill
+        Material     // floating Liquid Glass capsule
     };
+
+    /// `.buttonStyle(.glass)` / `.glassProminent` / clear glass.
+    enum class GlassButtonKind {
+        Regular,
+        Prominent, // accent tinted glass, white label
+        Clear      // very light glass for use over media / busy content
+    };
+
+    /// Mirror of SwiftUI's `Glass` (regular / clear, tint, interactive).
+    struct GlassStyle {
+        bool clear = false;      // .clear instead of .regular
+        Col tint = { 0.f, 0.f, 0.f, 0.f }; // .tint(color): alpha is the strength
+        float press = 0.f;       // 0..1 interactive press feedback (brighter)
+        float lift = 0.f;        // 0..1 hover feedback
+        float shadow = 1.f;      // drop shadow strength
+        float backing = 1.f;     // frosted backing strength (0 = see through)
+        float opacity = 1.f;     // overall opacity of the surface
+    };
+
+    // Liquid Glass switch metrics (iOS 26 UISwitch is 63 x 28 pt)
+    constexpr float kSwitchW = 63.f;
+    constexpr float kSwitchH = 28.f;
 
     class Ui {
     public:
@@ -199,6 +228,17 @@ namespace ios {
         void animSet(uint64_t id, float value);
         [[nodiscard]] bool animSettled(uint64_t id, float target, float eps = 0.002f) const;
 
+        /// Under-damped spring, the SwiftUI `.spring(response:dampingFraction:)` model: it can overshoot, which is
+        /// what gives Liquid Glass its bounce. Call once per frame per id; first use snaps to `target`.
+        float spring(uint64_t id, float target, float response = 0.42f, float damping = 0.80f);
+        [[nodiscard]] float springVelocity(uint64_t id) const;
+        void springSet(uint64_t id, float value);
+        /// "Interactive glass" press amount: 0 -> ~1 with a small overshoot, and a bounce back on release.
+        float pressSpring(uint64_t id, bool pressed);
+        /// Uniformly scales everything drawn until popScale() around the centre of `r` (interactive press bounce).
+        void pushScale(Rect const& r, float s);
+        void popScale();
+
         static uint64_t hashId(std::string_view s, uint64_t seed = 1469598103934665603ull);
         static uint64_t idOf(const void* p, uint64_t salt = 0) {
             return (reinterpret_cast<uintptr_t>(p) * 1099511628211ull) ^ (salt * 0x9E3779B97F4A7C15ull);
@@ -237,8 +277,27 @@ namespace ios {
         /// Settings-style coloured rounded square with a white glyph / monogram.
         void iconTile(Rect const& r, Col base, std::wstring const& monogram);
         void iconTile(Rect const& r, Col base, Glyph g);
-        /// Floating translucent surface (toolbar buttons, banners, popovers).
+        /// Floating translucent surface (toolbar buttons, banners, popovers). Now a regular Liquid Glass surface.
         void materialPill(Rect const& r, float radius);
+
+        // ---------------------------------------------------------------- Liquid Glass
+        /// `.glassEffect(.regular / .clear, in: shape)`: soft shadow, frosted backing, lit sheen, specular rim.
+        void glass(Rect const& r, float radius, GlassStyle const& st = GlassStyle {});
+        /// A row of round glass shapes (left to right) that merge when closer than `spacing`, like the shapes of a
+        /// `GlassEffectContainer`. They are separate circles above `spacing` and one capsule at zero gap.
+        void glassBlobs(std::vector<Vec2> const& centers, float radius, float spacing, GlassStyle const& st = GlassStyle {});
+        /// Capsule `.buttonStyle(.glass)` / `.glassProminent`. Returns true when clicked.
+        bool glassButton(uint64_t id, Rect const& r, std::wstring const& label, GlassButtonKind kind = GlassButtonKind::Regular,
+                         float fontPt = 15.f, bool enabled = true);
+        /// Circular glass icon button (toolbar back / close / playback controls).
+        bool glassIconButton(uint64_t id, Rect const& r, Glyph g, Col tint = { 0.f, 0.f, 0.f, 0.f }, float glyphScale = 0.52f,
+                             bool enabled = true);
+        /// `scrollEdgeEffectStyle`: content fades into `base` towards the edge so floating glass controls stay legible.
+        void scrollEdge(Rect const& r, bool top, Col base, float strength, float solid = 0.f);
+        /// Fill / stroke a rounded (continuous-corner) rectangle with an arbitrary brush.
+        void fillBrush(Rect const& r, float radius, ID2D1Brush* brush);
+        void strokeBrush(Rect const& r, float radius, ID2D1Brush* brush, float thickness);
+        ComPtr<ID2D1LinearGradientBrush> linearBrush(Vec2 a, Vec2 b, std::vector<D2D1_GRADIENT_STOP> const& stops);
 
         // ---------------------------------------------------------------- controls
         /// UISwitch (51x31 pt). Returns true when the value changed.
@@ -282,7 +341,11 @@ namespace ios {
         static float smoothDamp(float cur, float target, float& vel, float smoothTime, float dt);
         void ensureFactoryResources();
 
+        void glassSurface(Rect const& bounds, float radius, GlassStyle const& st, ID2D1Geometry* geo);
+
         std::unordered_map<uint64_t, Anim> anims_;
+        std::unordered_map<uint64_t, Anim> springs_;
+        std::vector<D2D1::Matrix3x2F> scaleStack_;
         std::unordered_map<uint64_t, ComPtr<ID2D1PathGeometry>> smoothCache_;
         ComPtr<ID2D1StrokeStyle> roundStroke_;
         ID2D1Factory* cachedFactory_ = nullptr;
@@ -297,6 +360,10 @@ namespace ios {
         uint64_t activeId_ = 0;
         uint64_t frame_ = 0;
     };
+
+    /// Liquid Glass sheen + specular rim drawn over a plate that was already filled (HUD modules). It only needs a
+    /// device context, no Ui frame. `strength` (0..1) follows the opacity of the plate underneath.
+    void drawGlassPlate(ID2D1DeviceContext* ctx, Rect const& r, float radius, float strength);
 
     /// Default UI font family: SF Pro (if installed) -> Segoe UI Variable -> Segoe UI.
     std::wstring defaultFontFamily();

@@ -64,7 +64,7 @@ namespace ios {
         p.accent = accent;
 
         if (p.dark) {
-            p.windowFill = rgb(28, 28, 31, 0.80f);
+            p.windowFill = rgb(24, 24, 28, 0.76f);
             p.windowBorder = rgb(255, 255, 255, 0.14f);
             p.sidebarFill = rgb(0, 0, 0, 0.12f);
             p.cell = rgb(255, 255, 255, 0.075f);
@@ -85,6 +85,14 @@ namespace ios {
             p.materialBorder = rgb(255, 255, 255, 0.14f);
             p.materialHighlight = rgb(255, 255, 255, 0.18f);
             p.shadow = rgb(0, 0, 0, 0.42f);
+            p.grouped = rgb(38, 38, 43);
+            p.glassBacking = rgb(30, 30, 36);
+            p.glassSheenTop = rgb(255, 255, 255, 0.17f);
+            p.glassSheenBottom = rgb(255, 255, 255, 0.07f);
+            p.clearSheenTop = rgb(255, 255, 255, 0.11f);
+            p.clearSheenBottom = rgb(255, 255, 255, 0.035f);
+            p.glassEdge = rgb(0, 0, 0, 0.42f);
+            p.cardBorder = rgb(255, 255, 255, 0.055f);
             p.blue = rgb(10, 132, 255);
             p.green = rgb(48, 209, 88);
             p.red = rgb(255, 69, 58);
@@ -97,7 +105,7 @@ namespace ios {
             p.gray = rgb(142, 142, 147);
             p.mint = rgb(99, 230, 226);
         } else {
-            p.windowFill = rgb(242, 242, 247, 0.84f);
+            p.windowFill = rgb(244, 244, 249, 0.82f);
             p.windowBorder = rgb(0, 0, 0, 0.12f);
             p.sidebarFill = rgb(0, 0, 0, 0.035f);
             p.cell = rgb(255, 255, 255, 0.92f);
@@ -118,6 +126,14 @@ namespace ios {
             p.materialBorder = rgb(0, 0, 0, 0.08f);
             p.materialHighlight = rgb(255, 255, 255, 0.60f);
             p.shadow = rgb(0, 0, 0, 0.20f);
+            p.grouped = rgb(242, 242, 247);
+            p.glassBacking = rgb(252, 252, 254);
+            p.glassSheenTop = rgb(255, 255, 255, 0.60f);
+            p.glassSheenBottom = rgb(255, 255, 255, 0.32f);
+            p.clearSheenTop = rgb(255, 255, 255, 0.34f);
+            p.clearSheenBottom = rgb(255, 255, 255, 0.12f);
+            p.glassEdge = rgb(0, 0, 0, 0.12f);
+            p.cardBorder = rgb(0, 0, 0, 0.045f);
             p.blue = rgb(0, 122, 255);
             p.green = rgb(52, 199, 89);
             p.red = rgb(255, 59, 48);
@@ -196,6 +212,7 @@ namespace ios {
         hitClips_.push_back(Rect(-1.0e7f, -1.0e7f, 1.0e7f, 1.0e7f));
         clipKinds_.clear();
         mirrorStack_.clear();
+        scaleStack_.clear();
         mirrorDepth = 0;
         ensureFactoryResources();
 
@@ -224,6 +241,8 @@ namespace ios {
         roundStroke_.Reset();
         cachedFactory_ = nullptr;
         anims_.clear();
+        springs_.clear();
+        scaleStack_.clear();
         g = Gfx {};
         activeId_ = 0;
     }
@@ -534,7 +553,7 @@ namespace ios {
 
     void Ui::shadow(Rect const& r, float radius, float blur, float dy, Col c) {
         if (c.a <= 0.001f || blur <= 0.5f) return;
-        const int n = 12;
+        const int n = blur > S(24.f) ? 12 : 8;
         for (int i = n; i >= 1; --i) {
             float t = static_cast<float>(i) / static_cast<float>(n); // 1 = outermost
             float grow = blur * t;
@@ -911,31 +930,40 @@ namespace ios {
         glyph(gl, inset(r, r.getWidth() * 0.18f, r.getHeight() * 0.18f), Col(1.f, 1.f, 1.f, 1.f), 1.05f, base);
     }
 
-    void Ui::materialPill(Rect const& r, float radius) {
-        shadow(r, radius, S(16.f), S(6.f), pal.shadow);
-        fillSmooth(r, radius, pal.material);
-        strokeSmooth(r, radius, pal.materialBorder, std::max(1.f, scale * 0.75f));
-    }
-
     // ======================================================================================== controls
     bool Ui::toggle(uint64_t id, Rect const& r, bool& value, bool enabled) {
-        const float w = r.getWidth(), h = r.getHeight();
+        // iOS 26 UISwitch: 63 x 28 pt track, an oval knob that springs across and turns into glass while touched
+        const float h = r.getHeight();
         auto cr = click(id, r, enabled);
-        float on = anim(id, value ? 1.f : 0.f, 0.075f);
-        float press = anim(id ^ 0x7777ull, (cr.pressed && enabled) ? 1.f : 0.f, 0.05f);
+        float on = spring(id, value ? 1.f : 0.f, 0.34f, 0.74f);
+        float onC = clamp01(on);
+        float press = clamp01(pressSpring(id ^ 0x7777ull, cr.pressed && enabled));
 
         float alpha = enabled ? 1.f : 0.5f;
-        Col track = mix(pal.switchOff, pal.green, on);
+        Col track = mix(pal.switchOff, pal.green, onC);
         rrect(r, h * 0.5f, mulAlpha(track, alpha));
 
-        float pad = h * (2.f / 31.f);
-        float thumbD = h - pad * 2.f;
-        float thumbW = thumbD + press * thumbD * 0.18f;
-        float left = (r.left + pad) + on * ((r.right - pad - thumbW) - (r.left + pad));
-        Rect thumb(left, r.top + pad, left + thumbW, r.bottom - pad);
-        shadow(thumb, thumbD * 0.5f, h * 0.16f, h * 0.07f, Col(0.f, 0.f, 0.f, 0.22f * alpha));
-        rrect(thumb, thumbD * 0.5f, mulAlpha(pal.thumb, alpha));
-        (void)w;
+        const float pad = h * (2.f / 28.f);
+        const float idleW = h * 1.46f;
+        const float thumbH = (h - pad * 2.f) + press * h * 0.22f;
+        const float thumbW = idleW + press * h * 0.34f;
+        const float over = std::max(1.f, scale);
+        float cx = (r.left + pad + idleW * 0.5f) + on * ((r.right - pad - idleW * 0.5f) - (r.left + pad + idleW * 0.5f));
+        cx = std::clamp(cx, r.left + pad + thumbW * 0.5f - over * 3.f, r.right - pad - thumbW * 0.5f + over * 3.f);
+        Rect thumb(cx - thumbW * 0.5f, r.centerY() - thumbH * 0.5f, cx + thumbW * 0.5f, r.centerY() + thumbH * 0.5f);
+        const float rad = thumbH * 0.5f;
+
+        shadow(thumb, rad, h * 0.22f, h * 0.09f, Col(0.f, 0.f, 0.f, (0.20f + 0.08f * press) * alpha));
+        rrect(thumb, rad, mulAlpha(pal.thumb, alpha * (1.f - 0.50f * press)));
+        if (!pal.dark) strokeSmooth(thumb, rad, Col(0.f, 0.f, 0.f, 0.07f * alpha), std::max(1.f, scale * 0.6f));
+        if (press > 0.01f) {
+            GlassStyle gs;
+            gs.clear = true;
+            gs.shadow = 0.f;
+            gs.backing = 0.f;
+            gs.opacity = press * alpha;
+            glass(thumb, rad, gs);
+        }
 
         if (cr.clicked) {
             value = !value;
@@ -945,14 +973,14 @@ namespace ios {
     }
 
     bool Ui::slider(uint64_t id, Rect const& track, float& value, float lo, float hi, float step) {
-        const float trackH = track.getHeight();
-        const float thumbD = S(28.f);
-        Rect hitR(track.left - thumbD * 0.5f, track.centerY() - thumbD * 0.9f, track.right + thumbD * 0.5f,
-                  track.centerY() + thumbD * 0.9f);
+        // iOS 26 UISlider: a 6 pt track and a capsule knob that grows and turns to glass while dragged
+        const float thumbW = S(36.f), thumbH = S(24.f);
+        const float span = std::max(1.f, track.getWidth() - thumbW);
+        Rect hitR(track.left - S(4.f), track.centerY() - thumbH * 0.9f, track.right + S(4.f), track.centerY() + thumbH * 0.9f);
         auto d = drag(id, hitR);
         bool changed = false;
-        if ((d.active || d.began) && track.getWidth() > 1.f) {
-            float t = clamp01((mouse().x - track.left) / track.getWidth());
+        if ((d.active || d.began) && track.getWidth() > thumbW) {
+            float t = clamp01((mouse().x - (track.left + thumbW * 0.5f)) / span);
             float nv = lo + t * (hi - lo);
             if (step > 0.f) nv = lo + std::round((nv - lo) / step) * step;
             nv = std::clamp(nv, std::min(lo, hi), std::max(lo, hi));
@@ -964,18 +992,27 @@ namespace ios {
 
         float t = hi > lo ? clamp01((value - lo) / (hi - lo)) : 0.f;
         float vis = anim(id ^ 0xA5A5ull, t, d.active ? 0.015f : 0.06f);
-        rrect(track, trackH * 0.5f, pal.tertiaryFill);
-        float x = track.left + track.getWidth() * vis;
-        if (x - track.left > 0.5f) {
-            rrect(Rect(track.left, track.top, std::max(track.left + trackH, x), track.bottom), trackH * 0.5f,
-                  pal.accent);
+        float grow = clamp01(spring(id ^ 0x3C3Cull, d.active ? 1.f : 0.f, 0.30f, 0.64f));
+
+        const float th = S(6.f);
+        Rect tr(track.left, track.centerY() - th * 0.5f, track.right, track.centerY() + th * 0.5f);
+        rrect(tr, th * 0.5f, pal.tertiaryFill);
+        float x = track.left + thumbW * 0.5f + span * vis;
+        rrect(Rect(tr.left, tr.top, std::max(tr.left + th, x), tr.bottom), th * 0.5f, pal.accent);
+
+        const float w = thumbW * (1.f + 0.14f * grow), h = thumbH * (1.f + 0.14f * grow);
+        Rect thumb(x - w * 0.5f, track.centerY() - h * 0.5f, x + w * 0.5f, track.centerY() + h * 0.5f);
+        shadow(thumb, h * 0.5f, S(9.f), S(3.f), Col(0.f, 0.f, 0.f, 0.22f + 0.06f * grow));
+        rrect(thumb, h * 0.5f, mulAlpha(pal.thumb, 1.f - 0.50f * grow));
+        if (!pal.dark) strokeSmooth(thumb, h * 0.5f, Col(0.f, 0.f, 0.f, 0.07f), std::max(1.f, scale * 0.6f));
+        if (grow > 0.01f) {
+            GlassStyle gs;
+            gs.clear = true;
+            gs.shadow = 0.f;
+            gs.backing = 0.f;
+            gs.opacity = grow;
+            glass(thumb, h * 0.5f, gs);
         }
-        float grow = anim(id ^ 0x3C3Cull, d.active ? 1.f : 0.f, 0.06f);
-        float r = thumbD * 0.5f * (1.f + 0.04f * grow);
-        Vec2 center = { x, track.centerY() };
-        shadow(Rect(center.x - r, center.y - r, center.x + r, center.y + r), r, S(7.f), S(2.5f),
-               Col(0.f, 0.f, 0.f, 0.28f));
-        circle(center, r, pal.thumb);
         return changed;
     }
 
@@ -983,11 +1020,12 @@ namespace ios {
         const int n = static_cast<int>(labels.size());
         if (n == 0) return selected;
         const float h = r.getHeight();
-        const float pad = S(2.f);
-        rrect(r, S(9.f), pal.tertiaryFill);
+        const float pad = S(2.5f);
+        rrect(r, h * 0.5f, pal.tertiaryFill);
 
         const float segW = (r.getWidth() - pad * 2.f) / static_cast<float>(n);
-        float selPos = anim(id, static_cast<float>(selected), 0.07f);
+        float selPos = spring(id, static_cast<float>(selected), 0.34f, 0.80f);
+        float vel = springVelocity(id);
 
         // dividers (hidden next to the selected segment)
         for (int i = 1; i < n; ++i) {
@@ -999,9 +1037,20 @@ namespace ios {
                      mulAlpha(pal.opaqueSeparator, std::min(1.f, a) * 0.8f));
         }
 
-        Rect thumb(r.left + pad + selPos * segW, r.top + pad, r.left + pad + selPos * segW + segW, r.bottom - pad);
-        shadow(thumb, S(7.f), S(5.f), S(1.5f), Col(0.f, 0.f, 0.f, pal.dark ? 0.30f : 0.14f));
-        rrect(thumb, S(7.f), pal.dark ? rgb(99, 99, 102) : rgb(255, 255, 255));
+        // the selection is a glass capsule that stretches while it travels (metaball-like squash and stretch)
+        float stretch = std::min(segW * 0.30f, std::fabs(vel) * segW * 0.055f);
+        float left = r.left + pad + selPos * segW - stretch * 0.5f;
+        Rect thumb(left, r.top + pad, left + segW + stretch, r.bottom - pad);
+        const float tr = thumb.getHeight() * 0.5f;
+        shadow(thumb, tr, S(8.f), S(2.f), Col(0.f, 0.f, 0.f, pal.dark ? 0.32f : 0.16f));
+        rrect(thumb, tr, pal.dark ? rgb(104, 104, 108) : rgb(255, 255, 255));
+        {
+            GlassStyle gs;
+            gs.clear = true;
+            gs.shadow = 0.f;
+            gs.backing = 0.f;
+            glass(thumb, tr, gs);
+        }
 
         int result = selected;
         for (int i = 0; i < n; ++i) {
@@ -1018,51 +1067,45 @@ namespace ios {
 
     bool Ui::button(uint64_t id, Rect const& r, std::wstring const& label, ButtonKind kind, float fontPt,
                     bool enabled) {
+        if (kind == ButtonKind::Material) return glassButton(id, r, label, GlassButtonKind::Regular, fontPt, enabled);
+        if (kind == ButtonKind::Filled) return glassButton(id, r, label, GlassButtonKind::Prominent, fontPt, enabled);
+
         auto cr = click(id, r, enabled);
-        float press = anim(id ^ 0x55ull, (cr.pressed ? 1.f : 0.f), 0.04f);
+        float press = clamp01(pressSpring(id ^ 0x55ull, cr.pressed && enabled));
         float hover = anim(id ^ 0x66ull, (cr.hovered ? 1.f : 0.f), 0.08f);
         float alpha = enabled ? 1.f : 0.45f;
         const float rad = r.getHeight() * 0.5f;
 
+        const bool filledShape = kind == ButtonKind::Tinted || kind == ButtonKind::Gray;
+        if (filledShape) pushScale(r, 1.f + 0.045f * press);
+
         Col fg = pal.accent;
         switch (kind) {
-        case ButtonKind::Filled:
-            rrect(r, rad, mulAlpha(mix(pal.accent, Col(1.f, 1.f, 1.f, pal.accent.a), 0.10f * hover), alpha * (1.f - 0.25f * press)));
-            fg = Col(1.f, 1.f, 1.f, 1.f);
-            break;
         case ButtonKind::Tinted:
             rrect(r, rad, withAlpha(pal.accent, (0.15f + 0.06f * hover + 0.08f * press) * alpha));
             break;
         case ButtonKind::Gray:
             rrect(r, rad, mulAlpha(mix(pal.quaternaryFill, pal.fill, 0.5f * hover + 0.5f * press), alpha));
             break;
-        case ButtonKind::Plain:
-            break;
         case ButtonKind::Destructive:
             fg = pal.red;
             break;
-        case ButtonKind::Material:
-            materialPill(r, rad);
-            fg = pal.label;
+        default:
             break;
         }
         float fa = alpha * (kind == ButtonKind::Plain || kind == ButtonKind::Destructive ? (1.f - 0.5f * press) : 1.f);
         TextStyle st(Font::Semibold, S(fontPt), mulAlpha(fg, fa), HAlign::Center, VAlign::Center);
         text(inset(r, S(6.f), 0.f), label, st);
+        if (filledShape) popScale();
         return cr.clicked;
     }
 
     bool Ui::iconButton(uint64_t id, Rect const& r, Glyph gl, bool filledCircle) {
+        if (filledCircle) return glassIconButton(id, r, gl);
         auto cr = click(id, r);
-        float press = anim(id ^ 0x55ull, cr.pressed ? 1.f : 0.f, 0.04f);
-        float hover = anim(id ^ 0x66ull, cr.hovered ? 1.f : 0.f, 0.08f);
-        Vec2 c = { r.centerX(), r.centerY() };
+        float press = clamp01(pressSpring(id ^ 0x55ull, cr.pressed));
         float rad = std::min(r.getWidth(), r.getHeight()) * 0.5f;
-        if (filledCircle) {
-            circle(c, rad, mix(pal.fill, pal.secondaryFill, 0.f));
-            if (hover > 0.01f || press > 0.01f) circle(c, rad, withAlpha(pal.label, 0.06f * hover + 0.08f * press));
-        }
-        glyph(gl, inset(r, rad * 0.55f, rad * 0.55f), mulAlpha(pal.secondaryLabel, 1.f), 1.1f);
+        glyph(gl, inset(r, rad * 0.55f, rad * 0.55f), mulAlpha(pal.secondaryLabel, 1.f - 0.4f * press), 1.1f);
         return cr.clicked;
     }
 
@@ -1070,15 +1113,22 @@ namespace ios {
                          bool focused, float caretWidthPx, bool caretVisible, bool* clearClicked) {
         if (clearClicked) *clearClicked = false;
         const float h = r.getHeight();
-        rrect(r, S(10.f), pal.tertiaryFill);
+        {
+            // iOS 26 search is a floating glass capsule; it lights up a little while it has focus
+            GlassStyle gs;
+            gs.lift = focused ? 0.55f : 0.f;
+            gs.shadow = 0.8f;
+            glass(r, h * 0.5f, gs);
+            if (focused) strokeSmooth(r, h * 0.5f, withAlpha(pal.accent, 0.75f), std::max(1.5f, scale * 1.25f));
+        }
 
-        Rect icon(r.left + S(9.f), r.top + h * 0.22f, r.left + S(9.f) + h * 0.56f, r.bottom - h * 0.22f);
+        Rect icon(r.left + h * 0.34f, r.top + h * 0.26f, r.left + h * 0.34f + h * 0.48f, r.bottom - h * 0.26f);
         glyph(Glyph::Magnifier, icon, pal.secondaryLabel, 0.95f);
 
-        float textLeft = icon.right + S(5.f);
-        float textRight = r.right - S(10.f);
+        float textLeft = icon.right + S(7.f);
+        float textRight = r.right - h * 0.36f;
         bool clearVisible = !txt.empty();
-        Rect clearR(r.right - h * 0.85f, r.top, r.right - S(2.f), r.bottom);
+        Rect clearR(r.right - h * 0.95f, r.top, r.right - S(3.f), r.bottom);
         if (clearVisible) {
             textRight = clearR.left;
             auto cc = click(id ^ 0xC1EA9ull, clearR);
@@ -1099,7 +1149,7 @@ namespace ios {
         }
         if (focused && caretVisible) {
             float cx = textLeft + caretWidthPx;
-            fillRect(Rect(cx, r.top + h * 0.2f, cx + std::max(1.5f, scale * 1.5f), r.bottom - h * 0.2f), pal.accent);
+            fillRect(Rect(cx, r.top + h * 0.24f, cx + std::max(1.5f, scale * 1.5f), r.bottom - h * 0.24f), pal.accent);
         }
         return click(id, r).clicked;
     }

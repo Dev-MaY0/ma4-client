@@ -247,6 +247,10 @@ namespace ios {
             bool editing[3] = { false, false, false };
             std::function<void(Col, bool)> apply;
             std::shared_ptr<TextEdit> hex;
+            // pull-down-to-dismiss (sheet detent behaviour)
+            bool dragging = false;
+            float dragStartY = 0.f;
+            float dragOff = 0.f;
         };
 
         // layout helpers (all pixel values)
@@ -322,6 +326,7 @@ namespace ios {
         Rect win_;
         int openRestart_ = 0; // 0 none, 1 animate from closed, 2 instant
         bool instantPush_ = false;
+        bool navEdge_ = true; // scroll edge fade under the floating nav buttons (off on the full-bleed replay map)
     };
 
 } // namespace ios
