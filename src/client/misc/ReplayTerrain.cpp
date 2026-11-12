@@ -1,17 +1,25 @@
 #include "pch.h"
 #include "ReplayTerrain.h"
+#include "util/Logger.h"
 
 #include "mc/common/world/level/BlockSource.h"
 #include "mc/common/world/level/block/Block.h"
 #include "mc/common/world/level/block/BlockLegacy.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 
 // ===================================================================================================================
 // block name -> map colour
+//
+// The game does not tell us a colour, so it is derived from the block id. Vanilla blocks are matched by tables
+// (most specific token first). Blocks of other namespaces - the add-on / custom blocks servers such as Hive ship - and
+// vanilla blocks added after this table was written fall through to word based guesses (material and colour words in
+// the id) and, as a last resort, a stable colour derived from the id so different blocks stay distinguishable.
 // ===================================================================================================================
 namespace terrain {
     namespace {
@@ -35,6 +43,26 @@ namespace terrain {
             return false;
         }
 
+        // `w` as a whole underscore separated word ("jack_o_lantern" has the words jack, o, lantern)
+        bool hasWord(std::string const& n, char const* w) {
+            const size_t len = std::strlen(w);
+            size_t pos = 0;
+            while ((pos = n.find(w, pos)) != std::string::npos) {
+                const bool left = pos == 0 || n[pos - 1] == '_';
+                const bool right = pos + len == n.size() || n[pos + len] == '_';
+                if (left && right) return true;
+                pos += 1;
+            }
+            return false;
+        }
+
+        bool anyWord(std::string const& n, std::initializer_list<char const*> words) {
+            for (auto* w : words) {
+                if (hasWord(n, w)) return true;
+            }
+            return false;
+        }
+
         struct Named {
             char const* token;
             Rgb rgb;
@@ -43,20 +71,29 @@ namespace terrain {
         // first match wins -> keep more specific tokens first
         const Named kSolid[] = {
             { "grass_block", { 88, 148, 56 } },
-            { "grass_path", { 148, 122, 65 } },
             { "dirt_path", { 148, 122, 65 } },
+            { "grass_path", { 148, 122, 65 } },
             { "podzol", { 91, 63, 24 } },
             { "mycelium", { 111, 98, 102 } },
+            { "pale_moss", { 150, 160, 120 } },
             { "moss", { 89, 109, 45 } },
             { "coarse_dirt", { 119, 85, 59 } },
+            { "dirt_with_roots", { 144, 103, 76 } },
             { "rooted_dirt", { 144, 103, 76 } },
             { "farmland", { 110, 75, 42 } },
-            { "dirt", { 134, 96, 67 } },
+            { "muddy_mangrove_roots", { 70, 58, 40 } },
+            { "mangrove_roots", { 116, 90, 56 } },
+            { "mud_brick", { 137, 104, 79 } },
+            { "packed_mud", { 142, 106, 79 } },
             { "mud", { 60, 57, 60 } },
+            { "dirt", { 134, 96, 67 } },
+            { "hardened_clay", { 152, 94, 67 } },
             { "clay", { 160, 166, 179 } },
             { "red_sandstone", { 181, 97, 31 } },
             { "sandstone", { 216, 203, 155 } },
             { "red_sand", { 190, 102, 33 } },
+            { "soul_sand", { 81, 62, 50 } },
+            { "soul_soil", { 75, 57, 46 } },
             { "sand", { 219, 207, 142 } },
             { "gravel", { 131, 127, 126 } },
             { "powder_snow", { 249, 254, 254 } },
@@ -72,18 +109,23 @@ namespace terrain {
             { "tuff", { 108, 109, 102 } },
             { "calcite", { 223, 224, 220 } },
             { "dripstone", { 131, 107, 93 } },
+            { "smooth_basalt", { 72, 72, 78 } },
+            { "basalt", { 73, 72, 77 } },
+            { "crying_obsidian", { 32, 10, 60 } },
+            { "obsidian", { 21, 18, 30 } },
+            { "bedrock", { 85, 85, 85 } },
+            { "nether_gold_ore", { 111, 54, 53 } },
+            { "nether_quartz_ore", { 111, 54, 53 } },
+            { "quartz_ore", { 111, 54, 53 } },
+            { "red_nether_brick", { 69, 7, 9 } },
+            { "nether_brick", { 44, 21, 26 } },
             { "netherrack", { 97, 38, 38 } },
             { "crimson_nylium", { 151, 33, 33 } },
             { "warped_nylium", { 22, 119, 121 } },
             { "nether_wart_block", { 114, 2, 2 } },
             { "warped_wart_block", { 22, 119, 121 } },
-            { "soul_sand", { 81, 62, 50 } },
-            { "soul_soil", { 75, 57, 46 } },
-            { "basalt", { 73, 72, 77 } },
             { "blackstone", { 42, 36, 41 } },
             { "end_stone", { 219, 222, 158 } },
-            { "obsidian", { 21, 18, 30 } },
-            { "bedrock", { 85, 85, 85 } },
             { "magma", { 142, 63, 31 } },
             { "glowstone", { 171, 131, 84 } },
             { "ore", { 125, 125, 125 } },
@@ -93,10 +135,10 @@ namespace terrain {
         const Named kColorWords[] = {
             { "light_blue", { 58, 175, 217 } }, { "light_gray", { 142, 142, 134 } }, { "magenta", { 189, 68, 179 } },
             { "orange", { 240, 118, 19 } },     { "yellow", { 248, 197, 39 } },      { "lime", { 112, 185, 25 } },
-            { "pink", { 237, 141, 172 } },      { "gray", { 62, 68, 71 } },          { "cyan", { 21, 137, 145 } },
-            { "purple", { 121, 42, 172 } },     { "blue", { 53, 57, 157 } },         { "brown", { 114, 71, 40 } },
-            { "green", { 84, 109, 27 } },       { "red", { 160, 39, 34 } },          { "black", { 20, 21, 25 } },
-            { "white", { 233, 236, 236 } },
+            { "pink", { 237, 141, 172 } },      { "gray", { 62, 68, 71 } },          { "grey", { 62, 68, 71 } },
+            { "cyan", { 21, 137, 145 } },       { "purple", { 121, 42, 172 } },      { "blue", { 53, 57, 157 } },
+            { "brown", { 114, 71, 40 } },       { "green", { 84, 109, 27 } },        { "red", { 160, 39, 34 } },
+            { "black", { 20, 21, 25 } },        { "white", { 233, 236, 236 } },
         };
 
         const Named kTerracotta[] = {
@@ -123,6 +165,17 @@ namespace terrain {
         };
 
         const Named kMisc[] = {
+            { "red_mushroom_block", { 200, 46, 45 } },
+            { "brown_mushroom_block", { 149, 111, 81 } },
+            { "mushroom_stem", { 207, 206, 198 } },
+            { "dead_", { 130, 123, 119 } },
+            { "tube_coral", { 49, 87, 206 } },
+            { "brain_coral", { 207, 91, 159 } },
+            { "bubble_coral", { 165, 26, 162 } },
+            { "fire_coral", { 167, 26, 32 } },
+            { "horn_coral", { 216, 199, 66 } },
+            { "chiseled_bookshelf", { 162, 130, 78 } },
+            { "bookshelf", { 162, 130, 78 } },
             { "brick", { 150, 97, 83 } },
             { "quartz", { 235, 229, 222 } },
             { "prismarine", { 99, 171, 158 } },
@@ -134,23 +187,71 @@ namespace terrain {
             { "lapis_block", { 31, 67, 140 } },
             { "redstone_block", { 170, 24, 5 } },
             { "coal_block", { 16, 15, 15 } },
+            { "raw_copper", { 154, 105, 79 } },
+            { "raw_iron", { 166, 135, 107 } },
+            { "raw_gold", { 221, 169, 46 } },
+            { "oxidized", { 82, 162, 132 } },
+            { "weathered", { 108, 153, 110 } },
+            { "exposed", { 161, 125, 103 } },
             { "copper", { 192, 107, 79 } },
+            { "amethyst", { 133, 97, 191 } },
+            { "sculk", { 20, 40, 46 } },
+            { "tinted_glass", { 44, 38, 46 } },
+            { "froglight", { 247, 232, 190 } },
+            { "ochre", { 247, 232, 190 } },
+            { "verdant", { 205, 238, 200 } },
+            { "pearlescent", { 245, 228, 240 } },
+            { "honeycomb", { 229, 148, 29 } },
+            { "honey", { 251, 185, 52 } },
+            { "dried_kelp", { 50, 58, 38 } },
+            { "tnt", { 219, 68, 26 } },
+            { "lodestone", { 147, 149, 152 } },
+            { "end_portal_frame", { 91, 120, 97 } },
+            { "beacon", { 116, 221, 215 } },
+            { "resin", { 219, 92, 41 } },
+            { "creaking_heart", { 96, 72, 56 } },
             { "hay_block", { 166, 139, 12 } },
             { "pumpkin", { 198, 118, 24 } },
+            { "jack_o_lantern", { 214, 152, 52 } },
             { "melon", { 111, 145, 31 } },
             { "cactus", { 85, 127, 43 } },
             { "sponge", { 195, 192, 74 } },
-            { "bookshelf", { 162, 130, 78 } },
             { "glass", { 175, 213, 219 } },
             { "shroomlight", { 240, 146, 70 } },
             { "sea_lantern", { 172, 199, 190 } },
             { "bone_block", { 229, 225, 207 } },
             { "slime", { 111, 192, 91 } },
-            { "honey", { 251, 185, 52 } },
             { "netherite", { 66, 61, 63 } },
             { "ancient_debris", { 94, 66, 58 } },
+            { "enchanting_table", { 120, 40, 50 } },
+            { "note_block", { 104, 70, 48 } },
+            { "jukebox", { 104, 70, 48 } },
+            { "composter", { 112, 84, 52 } },
+            { "barrel", { 134, 100, 60 } },
+            { "scaffolding", { 172, 146, 80 } },
+            { "campfire", { 140, 98, 54 } },
+            { "cake", { 252, 246, 238 } },
+            { "bed", { 160, 39, 34 } },
+            { "furnace", { 120, 120, 120 } },
+            { "smoker", { 112, 102, 92 } },
+            { "dispenser", { 120, 120, 120 } },
+            { "dropper", { 120, 120, 120 } },
+            { "observer", { 100, 100, 100 } },
+            { "piston", { 150, 130, 90 } },
+            { "hopper", { 70, 70, 74 } },
+            { "cauldron", { 70, 70, 74 } },
+            { "anvil", { 68, 68, 68 } },
+            { "grindstone", { 140, 140, 140 } },
+            { "stonecutter", { 125, 120, 115 } },
+            { "decorated_pot", { 140, 80, 60 } },
+            { "target", { 226, 170, 163 } },
             { "crafting_table", { 162, 130, 78 } },
+            { "table", { 150, 120, 78 } },
+            { "lectern", { 162, 130, 78 } },
+            { "loom", { 150, 120, 80 } },
+            { "command_block", { 160, 120, 90 } },
             { "cobweb", { 220, 220, 220 } },
+            { "web", { 220, 220, 220 } },
         };
 
         template<size_t N>
@@ -166,36 +267,127 @@ namespace terrain {
             return false;
         }
 
-        bool isPlantLike(std::string const& n) {
-            if (has(n, "grass") && !has(n, "grass_block") && !has(n, "grass_path")) return true;
-            if (has(n, "flower") && !has(n, "leaves") && !has(n, "azalea")) return true;
-            if (has(n, "azalea") && !has(n, "leaves") && !has(n, "block")) return true;
-            if (has(n, "mushroom") && !has(n, "block") && !has(n, "stem")) return true;
-            if (has(n, "coral") && !has(n, "coral_block")) return true;
-            if (has(n, "fungus") || has(n, "roots") || has(n, "sprouts")) return true;
-            return anyOf(n, { "fern", "tulip", "dandelion", "poppy", "orchid", "allium", "bluet", "cornflower",
-                              "lily_of", "waterlily", "rose", "peony", "lilac", "sapling", "propagule", "vine",
-                              "sugar_cane", "reeds", "kelp", "seagrass", "torch", "fire", "rail", "button", "lever",
-                              "pressure_plate", "tripwire", "redstone_wire", "carrots", "potatoes", "wheat",
-                              "beetroot", "sweet_berry", "candle", "lantern", "chain", "banner", "skull", "head",
-                              "sign", "ladder", "pointed_dripstone", "amethyst_cluster", "amethyst_bud",
-                              "glow_lichen", "lichen", "leaf_litter", "pitcher", "torchflower", "spore_blossom",
-                              "double_plant", "tallgrass", "flower_pot", "item_frame", "bell", "lightning_rod",
-                              "end_rod", "tall_" });
+        template<size_t N>
+        bool lookupWord(std::string const& n, Named const (&table)[N], Classified& c) {
+            for (auto const& e : table) {
+                if (hasWord(n, e.token)) {
+                    c.rgb[0] = e.rgb.r;
+                    c.rgb[1] = e.rgb.g;
+                    c.rgb[2] = e.rgb.b;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void set(Classified& c, int r, int g, int b) {
+            c.rgb[0] = static_cast<uint8_t>(r);
+            c.rgb[1] = static_cast<uint8_t>(g);
+            c.rgb[2] = static_cast<uint8_t>(b);
+        }
+
+        // blocks that are invisible or have no surface of their own, in every namespace
+        bool isInvisible(std::string const& n) {
+            if (n.empty() || n == "air" || n == "light_block" || n == "light" || n == "structure_void" || n == "barrier" ||
+                n == "border_block" || n == "moving_block" || n == "unknown" || n == "invisible_bedrock" || n == "allow" ||
+                n == "deny" || n == "info_update" || n == "info_update2" || n == "client_request_placeholder_block" ||
+                n == "reserved6" || n == "update_block" || n == "camera" || n == "bubble_column" || n == "end_gateway" ||
+                n == "end_portal" || n == "portal" || n == "nether_portal" || n.rfind("light_block", 0) == 0) {
+                return true;
+            }
+            return endsWith(n, "_air");
+        }
+
+        // vanilla blocks that are thin or plant-like: the map looks through them to the ground below
+        bool isThinVanilla(std::string const& n) {
+            if (n == "short_grass" || n == "tall_grass" || n == "grass" || n == "tallgrass" || n == "double_plant" ||
+                n == "dead_bush" || n == "deadbush" || n == "fire" || n == "soul_fire" || n == "lantern" ||
+                n == "soul_lantern" || n == "chain" || n == "iron_chain" || n == "bell" || n == "bamboo" ||
+                n == "bamboo_sapling" || n == "nether_wart" || n == "melon_stem" || n == "pumpkin_stem" ||
+                n == "attached_melon_stem" || n == "attached_pumpkin_stem" || n == "hanging_roots" ||
+                n == "pale_hanging_moss" || n == "sweet_berry_bush" || n == "turtle_egg" || n == "cocoa" ||
+                n == "brewing_stand" || n == "flower_pot" || n == "end_rod" || n == "lightning_rod" ||
+                n == "chorus_plant" || n == "chorus_flower" || n == "item_frame" || n == "glow_frame") {
+                return true;
+            }
+            if (anyWord(n, { "sapling", "propagule", "flower", "flowers", "tulip", "orchid", "allium", "bluet", "cornflower",
+                             "dandelion", "poppy", "oxeye", "daisy", "rose", "peony", "lilac", "lily", "pitcher", "blossom",
+                             "eyeblossom", "wildflowers", "torchflower", "vine", "vines", "kelp", "seagrass", "reeds",
+                             "cane", "waterlily", "fern", "sprouts", "roots", "fungus", "lichen", "litter", "dripleaf", "bush", "torch",
+                             "button", "rail", "tripwire", "wire", "repeater", "comparator", "lever", "carrots", "potatoes",
+                             "wheat", "beetroot", "beetroots", "ladder", "sign", "banner", "skull", "head", "bud", "cluster",
+                             "frogspawn", "spawn", "pickle", "pointed", "plate" })) {
+                // "dripstone cluster" does not exist, but a "roots" block that is a full block does
+                if (hasWord(n, "roots") && (has(n, "mangrove") || has(n, "dirt"))) return false;
+                return true;
+            }
+            if (hasWord(n, "mushroom") && !hasWord(n, "block") && !hasWord(n, "stem")) return true;
+            if (hasWord(n, "coral") && !hasWord(n, "block")) return true;
+            if (hasWord(n, "azalea") && !hasWord(n, "leaves") && !hasWord(n, "block")) return true;
+            if (hasWord(n, "candle") && !hasWord(n, "cake")) return true;
+            if (hasWord(n, "glow") && hasWord(n, "lichen")) return true;
+            return false;
+        }
+
+        // add-on blocks are mostly full blocks: only skip what is clearly not one
+        bool isThinAddon(std::string const& n) {
+            return anyWord(n, { "torch", "flame", "sapling", "flower", "flowers", "vine", "vines", "fern", "sign", "banner",
+                                "chain", "rope", "lantern", "candle", "button", "lever", "rail", "ladder", "particle",
+                                "marker", "hitbox", "collision", "invisible", "air" });
+        }
+
+        void fallbackColor(std::string const& n, Classified& c) {
+            c.guessed = true;
+            // 1. a colour word in the id ("red_tile", "ruby_ore" has none): terracotta tones for stone-like blocks
+            if (lookupWord(n, kColorWords, c)) return;
+
+            // 2. a material word
+            if (anyWord(n, { "leaf", "leaves", "foliage", "hedge", "bush" })) return set(c, 52, 120, 36);
+            if (anyWord(n, { "grass", "turf", "lawn" })) return set(c, 88, 148, 56);
+            if (anyWord(n, { "planks", "plank", "wood", "log", "timber", "board", "parquet" })) return set(c, 162, 130, 78);
+            if (anyWord(n, { "brick", "bricks", "tile", "tiles" })) return set(c, 150, 97, 83);
+            if (anyWord(n, { "dirt", "soil", "earth", "mud" })) return set(c, 134, 96, 67);
+            if (anyWord(n, { "sand", "beach", "desert" })) return set(c, 219, 207, 142);
+            if (anyWord(n, { "snow", "ice", "frost", "frozen" })) return set(c, 230, 240, 250);
+            if (anyWord(n, { "gold", "golden" })) return set(c, 246, 208, 61);
+            if (anyWord(n, { "iron", "steel", "metal", "chrome", "silver" })) return set(c, 200, 200, 200);
+            if (anyWord(n, { "copper", "bronze" })) return set(c, 192, 107, 79);
+            if (anyWord(n, { "glass", "crystal" })) return set(c, 175, 213, 219);
+            if (anyWord(n, { "lava", "magma", "ember" })) return set(c, 232, 98, 20);
+            if (anyWord(n, { "water", "sea", "ocean" })) return set(c, 52, 98, 214);
+            if (anyWord(n, { "concrete", "cement", "asphalt", "road", "pavement", "slab", "stone", "rock", "cobble", "granite",
+                             "marble", "ore", "block" })) {
+                return set(c, 125, 125, 125);
+            }
+
+            // 3. a stable colour derived from the id: different unknown blocks stay distinguishable
+            uint32_t h = 2166136261u;
+            for (unsigned char ch : n) {
+                h ^= ch;
+                h *= 16777619u;
+            }
+            c.unknown = true;
+            set(c, 100 + static_cast<int>(h & 0x6F), 100 + static_cast<int>((h >> 8) & 0x6F), 100 + static_cast<int>((h >> 16) & 0x6F));
         }
     } // namespace
 
     Classified classifyName(std::string n) {
         Classified c;
-        if (n.rfind("minecraft:", 0) == 0) n.erase(0, 10);
+        std::string ns;
+        if (size_t colon = n.find(':'); colon != std::string::npos) {
+            ns = n.substr(0, colon);
+            n.erase(0, colon + 1);
+        }
+        for (auto& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        for (auto& ch : ns) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        const bool vanilla = ns.empty() || ns == "minecraft";
 
         // --- invisible / thin things: look through them
-        if (n.empty() || n == "air" || endsWith(n, "_air") || n == "light_block" || n == "structure_void" ||
-            n == "barrier" || n == "moving_block" || n == "unknown" || n == "invisible_bedrock") {
+        if (isInvisible(n)) {
             c.kind = 0;
             return c;
         }
-        if (isPlantLike(n)) {
+        if (vanilla ? isThinVanilla(n) : isThinAddon(n)) {
             c.kind = 0;
             return c;
         }
@@ -203,12 +395,12 @@ namespace terrain {
         // --- liquids
         if (n == "water" || n == "flowing_water") {
             c.kind = 2;
-            c.rgb[0] = 52, c.rgb[1] = 98, c.rgb[2] = 214;
+            set(c, 52, 98, 214);
             return c;
         }
         if (n == "lava" || n == "flowing_lava") {
             c.kind = 2;
-            c.rgb[0] = 232, c.rgb[1] = 98, c.rgb[2] = 20;
+            set(c, 232, 98, 20);
             return c;
         }
 
@@ -216,52 +408,47 @@ namespace terrain {
         if (lookup(n, kSolid, c)) return c;
 
         // --- dyed blocks
-        if (anyOf(n, { "wool", "concrete", "terracotta", "glazed", "stained_glass", "carpet", "shulker_box" })) {
+        if (anyOf(n, { "wool", "concrete", "terracotta", "glazed", "stained_glass", "carpet", "shulker_box", "bed" })) {
             if (has(n, "terracotta") && !has(n, "glazed")) {
-                if (lookup(n, kTerracotta, c)) return c;
-                c.rgb[0] = 152, c.rgb[1] = 94, c.rgb[2] = 67;
+                if (lookupWord(n, kTerracotta, c)) return c;
+                set(c, 152, 94, 67);
                 return c;
             }
-            if (lookup(n, kColorWords, c)) return c;
+            if (lookupWord(n, kColorWords, c)) return c;
         }
 
         // --- leaves
         if (has(n, "leaves")) {
             if (has(n, "cherry")) {
-                c.rgb[0] = 232, c.rgb[1] = 165, c.rgb[2] = 190;
+                set(c, 232, 165, 190);
             } else if (has(n, "azalea")) {
-                c.rgb[0] = 101, c.rgb[1] = 124, c.rgb[2] = 47;
+                set(c, 101, 124, 47);
             } else if (has(n, "spruce")) {
-                c.rgb[0] = 54, c.rgb[1] = 90, c.rgb[2] = 54;
+                set(c, 54, 90, 54);
             } else if (has(n, "birch")) {
-                c.rgb[0] = 96, c.rgb[1] = 140, c.rgb[2] = 60;
+                set(c, 96, 140, 60);
             } else if (has(n, "mangrove")) {
-                c.rgb[0] = 90, c.rgb[1] = 130, c.rgb[2] = 40;
+                set(c, 90, 130, 40);
+            } else if (has(n, "pale_oak")) {
+                set(c, 120, 140, 110);
             } else {
-                c.rgb[0] = 52, c.rgb[1] = 120, c.rgb[2] = 36;
+                set(c, 52, 120, 36);
             }
             return c;
         }
 
         // --- wood
-        if (anyOf(n, { "log", "_wood", "stem", "hyphae" })) {
+        if (anyOf(n, { "log", "_wood", "stem", "hyphae", "bamboo_block" })) {
             if (lookup(n, kLogs, c)) return c;
         }
-        if (anyOf(n, { "planks", "slab", "stairs", "fence", "door", "trapdoor", "plate", "wood" })) {
+        if (anyOf(n, { "planks", "slab", "stairs", "fence", "door", "trapdoor", "wood", "mosaic" })) {
             if (lookup(n, kTrees, c)) return c;
         }
 
         if (lookup(n, kMisc, c)) return c;
 
-        // --- unknown: stable pastel derived from the name so different blocks stay distinguishable
-        uint32_t h = 2166136261u;
-        for (unsigned char ch : n) {
-            h ^= ch;
-            h *= 16777619u;
-        }
-        c.rgb[0] = static_cast<uint8_t>(90 + (h & 0x7F));
-        c.rgb[1] = static_cast<uint8_t>(90 + ((h >> 8) & 0x7F));
-        c.rgb[2] = static_cast<uint8_t>(90 + ((h >> 16) & 0x7F));
+        // --- vanilla names that none of the tables know (new blocks) and every add-on block
+        fallbackColor(n, c);
         return c;
     }
 } // namespace terrain
@@ -299,21 +486,36 @@ namespace {
 
 void TerrainRecorder::reset() {
     chunks.clear();
+    // block types are registered again per world / server (add-on blocks come and go): never trust old addresses
+    infoCache.clear();
 }
 
 TerrainRecorder::BlockInfo const& TerrainRecorder::classify(SDK::BlockLegacy* legacy) {
     static const BlockInfo skip {};
     if (!legacy) return skip;
 
+    // The cache is keyed by address. The game frees and re-creates block types when a world or server is joined, so an
+    // address can later belong to a different block: the hash of the id is compared on every hit.
+    const int64_t hash = legacy->namespacedId.hash;
     auto it = infoCache.find(legacy);
-    if (it != infoCache.end()) return it->second;
+    if (it != infoCache.end() && it->second.nameHash == hash) return it->second;
 
     BlockInfo info;
-    auto result = terrain::classifyName(legacy->namespacedId.getString());
+    const std::string id = legacy->namespacedId.getString();
+    auto result = terrain::classifyName(id);
     info.kind = result.kind == 0 ? Kind::Skip : (result.kind == 2 ? Kind::Liquid : Kind::Solid);
     std::memcpy(info.rgb, result.rgb, 3);
+    info.nameHash = hash;
+
+    // blocks the tables did not know: write them to the log (once each) so the tables can be extended
+    if (result.guessed && loggedGuesses.size() < 96 && loggedGuesses.insert(id).second) {
+        Logger::Info("Replay map: no colour table entry for block '{}' -> {} colour ({}, {}, {})", id,
+                     result.unknown ? "derived" : "guessed", static_cast<int>(result.rgb[0]), static_cast<int>(result.rgb[1]),
+                     static_cast<int>(result.rgb[2]));
+    }
+
     if (infoCache.size() > 4096) infoCache.clear();
-    return infoCache.emplace(legacy, info).first->second;
+    return infoCache.insert_or_assign(legacy, info).first->second;
 }
 
 bool TerrainRecorder::sampleColumn(SDK::BlockSource* region, int x, int z, int yTop, int yBottom, uint8_t rgb[3],

@@ -55,6 +55,8 @@ private:
 
     void startMarketFetch();
     void rebuildMarketIfNeeded();
+    void renderFrame();
+    void reportRenderFailure(char const* what);
     ios::Strings makeStrings();
     void fillModules(ios::Frame& f);
     void fillClientSettings(ios::Frame& f);
@@ -73,6 +75,9 @@ private:
     size_t lastModuleCount = 0;
     bool marketBuilt = false;
     bool shouldRebuildMarket = false;
+    int renderFailures = 0;     // consecutive frames that threw
+    int renderFailuresTotal = 0;
+    bool loggedOpen = false;    // the "menu opened" diagnostics line was written for this opening
     bool shellVisible = false;
     float pendingWheel = 0.f;
     std::optional<std::string> pendingJump;

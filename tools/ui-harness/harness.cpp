@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include "client/screen/ios/IosCards.h"
 #include "client/screen/ios/IosShell.h"
 
 #include <d3d11.h>
@@ -275,7 +276,7 @@ static void buildFrame(Frame& f, Env& e, bool hudPreview) {
     f.replay.toggleRecording = [] {};
     f.replay.addMarker = [] {};
     f.replay.remove = [](uint64_t) {};
-    f.version = L"v1.1.0";
+    f.version = L"v1.2.0";
     f.str.appName = L"ma4";
     f.logo = e.logo.Get();
     struct M {
@@ -650,6 +651,139 @@ static void runBench(Env& e) {
     bench(e, "scene + blur + replay viewer", Section::Replay, false, true, true, n, true);
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------
+// HUD cards (Spotify "Now Playing" and the Tab key player list) on the fake game scene
+static ComPtr<ID2D1BitmapBrush1> pixelBrush(Env& e, std::vector<uint32_t> const& bgra, UINT size, bool nearest) {
+    ComPtr<ID2D1Bitmap> bmp;
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    ComPtr<ID2D1Bitmap1> bmp1;
+    if (FAILED(e.ctx->CreateBitmap(D2D1::SizeU(size, size), bgra.data(), size * 4, props, bmp.GetAddressOf()))) return {};
+    ComPtr<ID2D1BitmapBrush1> brush;
+    D2D1_BITMAP_BRUSH_PROPERTIES1 bp = D2D1::BitmapBrushProperties1(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
+                                                                    nearest ? D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_INTERPOLATION_MODE_LINEAR);
+    e.ctx->CreateBitmapBrush(bmp.Get(), &bp, nullptr, brush.GetAddressOf());
+    return brush;
+}
+
+static void renderCards(Env& e, const wchar_t* out, bool tab, float posSeconds, bool paused = false, bool noArt = false, bool lyricsLoading = false) {
+    Ui& ui = Ui::get();
+    ui.releaseDeviceResources();
+    Gfx g;
+    g.ctx = e.ctx.Get();
+    g.brush = e.brush.Get();
+    g.dwrite = e.dwrite.Get();
+    ComPtr<ID2D1Factory> fac;
+    e.ctx->GetFactory(fac.GetAddressOf());
+    g.d2d = fac.Get();
+    for (int i = 0; i < 5; ++i) g.fonts[i] = e.fonts[i].Get();
+    Palette pal = Palette::make(Appearance::Dark, Col(10.f / 255.f, 132.f / 255.f, 1.f, 1.f));
+
+    // artwork: a soft diagonal gradient with a disc, 128 x 128
+    std::vector<uint32_t> art(128 * 128);
+    for (int y = 0; y < 128; ++y) {
+        for (int x = 0; x < 128; ++x) {
+            float fx = x / 127.f, fy = y / 127.f;
+            float dx = fx - 0.5f, dy = fy - 0.55f;
+            float disc = std::sqrt(dx * dx + dy * dy) < 0.26f ? 1.f : 0.f;
+            int r = static_cast<int>(40 + 150 * fx + 40 * disc), gg = static_cast<int>(30 + 60 * fy + 120 * disc), b = static_cast<int>(120 + 100 * (1.f - fx));
+            art[y * 128 + x] = (255u << 24) | (std::min(255, r) << 16) | (std::min(255, gg) << 8) | std::min(255, b);
+        }
+    }
+    auto artBrush = pixelBrush(e, art, 128, false);
+
+    // faces: 8 x 8 pixel patterns in different colours
+    std::vector<ComPtr<ID2D1BitmapBrush1>> faces;
+    const uint32_t skin[] = { 0xFFC69B72, 0xFFE0B48C, 0xFF8D5A3B, 0xFFF1C9A0, 0xFFB07A55 };
+    const uint32_t hair[] = { 0xFF3B2A1B, 0xFF1F1F1F, 0xFFC9A227, 0xFF7B3F00, 0xFFB5442E };
+    for (int i = 0; i < 12; ++i) {
+        std::vector<uint32_t> px(64);
+        for (int y = 0; y < 8; ++y) {
+            for (int x = 0; x < 8; ++x) {
+                uint32_t c = skin[i % 5];
+                if (y < 2 || (y < 4 && (x < 1 || x > 6))) c = hair[(i * 3) % 5];
+                if (y == 4 && (x == 2 || x == 5)) c = 0xFF2B3A67; // eyes
+                if (y == 6 && x >= 3 && x <= 4) c = 0xFF8A4B38;   // mouth
+                px[y * 8 + x] = c;
+            }
+        }
+        faces.push_back(pixelBrush(e, px, 8, true));
+    }
+
+    const float scale = 1.6f;
+    const Rect screen(0, 0, static_cast<float>(e.w), static_cast<float>(e.h));
+    NowPlayingState npState;
+    const int frames = 70;
+    for (int i = 0; i < frames; ++i) {
+        e.ctx->BeginDraw();
+        e.ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+        drawScene(e, false, false);
+        Input in;
+        in.dt = 1.f / 60.f;
+        if (tab) {
+            ui.beginFrame(g, in, pal, 1.15f, false);
+            TabData d;
+            d.title = L"The Hive";
+            d.subtitle = L"23 players";
+            d.screenW = screen.getWidth();
+            d.screenH = screen.getHeight();
+            const wchar_t* names[] = { L"\u00A7aSteve", L"\u00A7l\u00A7cAlexTheGreat", L"\u00A77[VIP] \u00A7fNotch", L"\u00A7eHerobrine", L"\u00A7bDiamondDan",
+                                       L"\u00A78Shadow", L"\u00A71DeepBlue", L"\u00A76GoldenGirl", L"\u00A7dPinkPanda", L"\u00A70Void",
+                                       L"\u00A7fplain_name", L"\u00A7a[Mod] \u00A7fWatcher", L"\u00A7cRedstoneRex", L"\u00A73CyanSky", L"\u00A79BlueJay",
+                                       L"\u00A72Creeper", L"\u00A74Nether", L"\u00A75Enderling", L"\u00A7qEmeraldEyes", L"\u00A7uAmethyst", L"\u00A7vCopperTop",
+                                       L"a_really_long_player_name_that_does_not_fit", L"\u00A7lBoldOne" };
+            for (int k = 0; k < 23; ++k) {
+                TabRow r;
+                r.text = names[k];
+                if (k % 7 != 6) {
+                    r.face = faces[k % faces.size()].Get();
+                    r.faceSize = 8.f;
+                }
+                d.rows.push_back(r);
+            }
+            drawTabList(ui, d, Ui::hashId("harness.tab"), i == 0);
+            ui.endFrame();
+        } else {
+            ui.beginFrame(g, in, pal, 1.f, false);
+            NowPlayingData d;
+            d.width = 320.f;
+            d.title = L"Never Gonna Give You Up";
+            d.artist = L"Rick Astley";
+            d.durationMs = 213000;
+            d.positionMs = (posSeconds + (i > 40 ? (i - 40) / 60.f : 0.f)) * 1000.0;
+            d.playing = !paused;
+            d.artBrush = noArt ? nullptr : artBrush.Get();
+            if (!noArt) d.tint = Col(0.42f, 0.30f, 0.52f, 1.f);
+            d.textIdle = L"Nothing is playing";
+            d.textLoading = L"Looking for lyrics...";
+            d.textNone = L"No synced lyrics for this song";
+            d.textInstrumental = L"Instrumental";
+            static const wchar_t* lines[] = { L"We're no strangers to love", L"You know the rules and so do I", L"A full commitment's what I'm thinking of",
+                                              L"You wouldn't get this from any other guy", L"I just wanna tell you how I'm feeling", L"Gotta make you understand" };
+            // the line changes 1.0 s after the start of the clip (positions 0.. in 10 s steps)
+            int idx = std::min(5, static_cast<int>(d.positionMs / 1000.0 / 4.0));
+            if (lyricsLoading) {
+                d.lyric = NowPlayingData::Lyric::Loading;
+            } else {
+                d.lyric = NowPlayingData::Lyric::Ready;
+                d.line = idx;
+                d.firstLine = std::max(0, idx - 2);
+                for (int j = d.firstLine; j <= std::min(5, idx + 2); ++j) d.lines.push_back(lines[j]);
+            }
+            e.ctx->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale) * D2D1::Matrix3x2F::Translation(60.f, 60.f));
+            drawNowPlaying(ui, d, npState);
+            e.ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+            ui.endFrame();
+        }
+        HRESULT hr = e.ctx->EndDraw();
+        if (FAILED(hr)) {
+            std::printf("EndDraw failed 0x%08lx\n", static_cast<unsigned long>(hr));
+            break;
+        }
+    }
+    writePng(e, out);
+}
+
 static void loadLogo(Env& e, const wchar_t* path) {
     ComPtr<IWICBitmapDecoder> dec;
     if (FAILED(e.wic->CreateDecoderFromFilename(path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, dec.GetAddressOf()))) return;
@@ -704,5 +838,9 @@ int wmain(int argc, wchar_t** argv) {
     renderScenario(e, p(L"16_press_toggle.png").c_str(), false, false, Section::All, false, -1, false, 1486, 313, 0);
     renderScenario(e, p(L"17_press_row.png").c_str(), false, false, Section::All, false, -1, false, 1000, 316, 0);
     g_press = false;
+    renderCards(e, p(L"18_nowplaying.png").c_str(), false, 41.f);
+    renderCards(e, p(L"19_tablist.png").c_str(), true, 0.f);
+    renderCards(e, p(L"20_nowplaying_paused_noart.png").c_str(), false, 130.f, true, true);
+    renderCards(e, p(L"21_nowplaying_loading.png").c_str(), false, 12.f, false, false, true);
     return 0;
 }

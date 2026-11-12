@@ -42,6 +42,10 @@ CMake caches absolute paths: if this folder is moved / renamed, delete `out/` fi
   controls, reads the version from `src/client/Ma4.h` (CMake), and its resources (icon, logo) are compiled by a custom
   `rc.exe` command because the MSYS2 CMake has no `cmcldeps` for Ninja + RC. `Ma4Launcher.exe --render out.png` draws
   a frame without a window (use it to check the launcher visually).
+- `src/client/screen/ios/IosCards.*` - game independent cards for HUD modules (Spotify "Now Playing", Tab player list).
+  They take plain data so the harness renders them; the modules (`modules/hud/SpotifyHUD.*`, `TabList.*`) only gather the
+  data. `client/misc/NowPlaying.*` (Windows media controls via C++/WinRT, thread) and `client/misc/Lyrics.*` (LRCLIB,
+  thread, injectable fetch) are game independent too: `tools/nowplaying-probe` builds them standalone.
 - `tools/ui-harness/` - renders every screen to PNG without Minecraft (`build.bat`, then `out\harness.exe <dir>`).
   Use it to check UI changes visually; it links the same sources as the DLL. `out\harness.exe --bench [W H]` prints
   the frame cost and the layers / layouts / gradients per frame: run it after touching the UI toolkit.
@@ -50,4 +54,7 @@ CMake caches absolute paths: if this folder is moved / renamed, delete `out/` fi
 - UI performance rules (the menu is drawn on the game's render thread every frame): no clip layer per row (use
   `Ui::beginCard` / `fillCell`), no network or disk work in `ClickGUI::onRender` (the plugin registry is fetched on a
   thread), create gradient brushes through `Ui::linearBrush` (cached) and text through `Ui::text` (layouts cached).
+- Never block the render thread or the key handlers: network, WinRT calls and directory scans live on their own threads
+  (SpotifyHUD, the plugin registry). Code that draws from inside another toolkit frame (a HUD preview in the menu) must
+  check `Ui::inFrame()` instead of calling `beginFrame()` again.
 - Game hooks / signatures (`src/mc`, `src/client/memory`) are version specific and cannot be verified without the game.

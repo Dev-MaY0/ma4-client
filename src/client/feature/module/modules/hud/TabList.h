@@ -1,6 +1,5 @@
 #pragma once
 #include "../../HUDModule.h"
-#include "mc/common/client/renderer/TexturePtr.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -16,13 +15,18 @@ namespace SDK {
     class SkinImage;
 }
 
+/// The player list shown while the Tab key is held, drawn as an iOS card: a glass panel with the server name and the
+/// player count, and one rounded list per column with the player's face, and the name with its Minecraft colour codes.
+/// It is drawn with Direct2D (SF-style font, rounded avatars), not with the game's UI renderer.
 class TabList : public Module {
 public:
     TabList();
 
-    void onRenderLayer(Event&);
+    void onRenderOverlay(Event&);
     void onRenderNameTag(Event&);
     void onTick(Event&);
+    void onCleanup(Event&);
+    void onDisable() override;
     void afterLoadConfig() override;
     bool shouldHoldToToggle() override { return true; }
     bool shouldRenderWithTabList() const override { return true; }
@@ -40,15 +44,14 @@ private:
         size_t byteCount = 0;
     };
 
-    struct CachedPlayerHeadTexture {
+    /// The face of a player (8x8 head + hat layer of the skin) as a Direct2D bitmap.
+    struct CachedHead {
         PlayerHeadSkinKey skinKey;
-        std::string texturePath;
-        SDK::TexturePtr texture;
-        std::chrono::steady_clock::time_point nextPathResolveAttempt {};
-        std::chrono::steady_clock::time_point nextTextureLoadAttempt {};
-        uint32_t pathResolveAttempts = 0;
-        uint32_t textureLoadAttempts = 0;
         bool hasSkinKey = false;
+        ComPtr<ID2D1Bitmap> bitmap;
+        ComPtr<ID2D1BitmapBrush1> brush;
+        uint32_t faceSize = 8;
+        std::chrono::steady_clock::time_point nextAttempt {};
     };
 
     struct CachedPlayerRow {
@@ -57,7 +60,6 @@ private:
         std::string strippedName;
         std::wstring displayNameWide;
         std::wstring strippedNameWide;
-        float measuredWidth = 0.f;
         int colorSortIndex = 16;
     };
 
@@ -65,26 +67,19 @@ private:
     bool refreshActivePlayerNames(SDK::Level* level);
     void syncNameTagCache(SDK::Level* level);
     void rebuildRows(SDK::Level* level);
-    void updateLayoutMeasurements(MCDrawUtil& dc, std::wstring const& title, float textSize, float rowTextOffset);
-    void drawPlayerHead(MCDrawUtil& dc, SDK::PlayerListEntry& entry, std::string const& cacheKey,
-                        d2d::Rect const& bounds) const;
-    void pruneHeadTextureCache();
-    bool skinKeyMatches(PlayerHeadSkinKey const& key, SDK::SerializedSkinRef const& skin,
-                        SDK::SkinImage const& image) const;
+    void pruneHeadCache();
+    CachedHead* headFor(ID2D1DeviceContext* ctx, SDK::PlayerListEntry& entry, std::string const& cacheKey);
+    bool skinKeyMatches(PlayerHeadSkinKey const& key, SDK::SerializedSkinRef const& skin, SDK::SkinImage const& image) const;
     PlayerHeadSkinKey makeSkinKey(SDK::SerializedSkinRef const& skin, SDK::SkinImage const& image) const;
     ColorValue getColorOrDefault(ValueType const& value, ColorValue const& fallback) const;
     float getFloatOrDefault(ValueType const& value, float fallback) const;
 
-    mutable std::unordered_map<std::string, CachedPlayerHeadTexture> cachedHeadTextures;
+    std::unordered_map<std::string, CachedHead> cachedHeads;
     std::unordered_set<std::string> cachedActivePlayerNames;
     std::vector<CachedPlayerRow> cachedRows;
-    std::wstring cachedLayoutTitle;
-    float cachedLongestText = 0.f;
-    float cachedLayoutTextSize = 0.f;
-    float cachedLayoutRowTextOffset = 0.f;
     uint64_t cachedActorNameTagsRevision = 0;
     bool rowsDirty = true;
-    bool layoutDirty = true;
+    bool shownLastFrame = false; // for the pop-in animation
 
     ValueType textSizeS = FloatValue(20.f);
     ValueType textCol = ColorValue(1.f, 1.f, 1.f, 1.f);

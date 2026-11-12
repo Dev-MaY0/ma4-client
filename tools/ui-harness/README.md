@@ -13,3 +13,6 @@ It is not part of the CMake build.
 `out\harness.exe --bench [width height]` does not write PNGs: it draws the fake game scene (optionally with the menu
 blur) and every menu page 150 times, waits for the GPU after each frame and prints the frame time (average, median,
 95th percentile, slowest) plus how many text layouts, gradients, path geometries and layers the UI created per frame.
+
+The harness also renders the HUD cards (Spotify "Now Playing", the Tab player list) from fake data: `18_nowplaying.png`,
+`19_tablist.png` and two more states.

@@ -2,18 +2,21 @@
 #include "TabList.h"
 #include "client/Ma4.h"
 #include "client/event/events/RenderNameTagEvent.h"
-#include "client/event/events/RenderLayerEvent.h"
+#include "client/event/events/RenderOverlayEvent.h"
+#include "client/event/events/RendererCleanupEvent.h"
 #include "client/event/events/TickEvent.h"
-#include "client/misc/PlayerHeadCache.h"
 #include "client/misc/NameTagCache.h"
-#include "mc/common/client/gui/controls/UIControl.h"
-#include "mc/common/client/gui/controls/VisualTree.h"
+#include "client/screen/ScreenManager.h"
+#include "client/screen/ios/IosBridge.h"
+#include "client/screen/ios/IosCards.h"
+#include "client/screen/ios/IosUi.h"
 #include "mc/common/world/actor/player/SerializedSkinRef.h"
 #include "mc/common/world/level/Level.h"
 #include "util/Logger.h"
 #include "util/DrawContext.h"
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,9 +33,10 @@ TabList::TabList()
                LocalizeString::get("client.module.tabList.hideModules.desc"), hideModules);
     addSliderSetting("textSize", LocalizeString::get("client.textmodule.props.textSize.name"), L"", textSizeS,
                      FloatValue(2.f), FloatValue(100.f), FloatValue(2.f));
-    listen<RenderLayerEvent>(static_cast<EventListenerFunc>(&TabList::onRenderLayer));
+    listen<RenderOverlayEvent>(static_cast<EventListenerFunc>(&TabList::onRenderOverlay));
     listen<RenderNameTagEvent>(static_cast<EventListenerFunc>(&TabList::onRenderNameTag));
     listen<TickEvent>(static_cast<EventListenerFunc>(&TabList::onTick));
+    listen<RendererCleanupEvent>(static_cast<EventListenerFunc>(&TabList::onCleanup), true);
 }
 
 bool TabList::skinKeyMatches(PlayerHeadSkinKey const& key, SDK::SerializedSkinRef const& skin,
@@ -90,7 +94,7 @@ bool TabList::refreshActivePlayerNames(SDK::Level* level) {
     if (changed) {
         cachedActivePlayerNames = std::move(players);
         rowsDirty = true;
-        pruneHeadTextureCache();
+        pruneHeadCache();
     }
 
     return changed;
@@ -124,7 +128,6 @@ void TabList::rebuildRows(SDK::Level* level) {
     cachedRows.clear();
     if (!level || !level->getPlayerList()) {
         rowsDirty = false;
-        layoutDirty = true;
         return;
     }
 
@@ -147,96 +150,71 @@ void TabList::rebuildRows(SDK::Level* level) {
     });
 
     rowsDirty = false;
-    layoutDirty = true;
 }
 
-void TabList::updateLayoutMeasurements(MCDrawUtil& dc, std::wstring const& title, float textSize, float rowTextOffset) {
-    if (!layoutDirty && cachedLayoutTitle == title && cachedLayoutTextSize == textSize &&
-        cachedLayoutRowTextOffset == rowTextOffset) {
-        return;
-    }
 
-    constexpr auto font = Renderer::FontSelection::PrimaryRegular;
-
-    float longestText = dc.getTextSize(title, font, textSize).x;
-    for (auto& row : cachedRows) {
-        row.measuredWidth = rowTextOffset + dc.getTextSize(row.strippedNameWide, font, textSize).x + 3.f;
-        if (row.measuredWidth > longestText) longestText = row.measuredWidth;
-    }
-
-    cachedLayoutTitle = title;
-    cachedLayoutTextSize = textSize;
-    cachedLayoutRowTextOffset = rowTextOffset;
-    cachedLongestText = longestText;
-    layoutDirty = false;
+void TabList::onCleanup(Event&) {
+    cachedHeads.clear(); // Direct2D bitmaps belong to the renderer's device
 }
 
-void TabList::pruneHeadTextureCache() {
-    for (auto it = cachedHeadTextures.begin(); it != cachedHeadTextures.end();) {
+void TabList::onDisable() {
+    shownLastFrame = false;
+}
+
+void TabList::pruneHeadCache() {
+    for (auto it = cachedHeads.begin(); it != cachedHeads.end();) {
         if (cachedActivePlayerNames.contains(it->first))
             ++it;
         else
-            it = cachedHeadTextures.erase(it);
+            it = cachedHeads.erase(it);
     }
 }
 
-void TabList::drawPlayerHead(MCDrawUtil& dc, SDK::PlayerListEntry& entry, std::string const& cacheKey,
-                             d2d::Rect const& bounds) const {
-    if (!dc.renderCtx) return;
-
-    auto image = entry.skin.getSkinImage();
-    if (!image) return;
+TabList::CachedHead* TabList::headFor(ID2D1DeviceContext* ctx, SDK::PlayerListEntry& entry, std::string const& cacheKey) {
+    auto* image = entry.skin.getSkinImage();
+    if (!image || !image->hasRgbaBytes()) return nullptr;
 
     auto now = std::chrono::steady_clock::now();
-    auto& cachedHead = cachedHeadTextures[cacheKey];
-    if (!cachedHead.hasSkinKey || !skinKeyMatches(cachedHead.skinKey, entry.skin, *image)) {
-        cachedHead = {};
-        cachedHead.skinKey = makeSkinKey(entry.skin, *image);
-        cachedHead.hasSkinKey = true;
-    }
+    auto& head = cachedHeads[cacheKey];
+    if (head.hasSkinKey && !skinKeyMatches(head.skinKey, entry.skin, *image)) head = {}; // the skin changed
+    if (head.bitmap && head.brush) return &head;
+    if (now < head.nextAttempt) return nullptr;
 
-    if (cachedHead.texturePath.empty() &&
-        (cachedHead.nextPathResolveAttempt == std::chrono::steady_clock::time_point {} ||
-         now >= cachedHead.nextPathResolveAttempt)) {
-        cachedHead.texturePath = PlayerHeadCache::getTexturePath(entry.skin);
-        if (cachedHead.texturePath.empty()) {
-            cachedHead.pathResolveAttempts++;
-            std::chrono::milliseconds delay = cachedHead.pathResolveAttempts <= 1   ? std::chrono::milliseconds(500)
-                                              : cachedHead.pathResolveAttempts == 2 ? std::chrono::milliseconds(1000)
-                                              : cachedHead.pathResolveAttempts == 3 ? std::chrono::milliseconds(2000)
-                                                                                    : std::chrono::milliseconds(10000);
-            cachedHead.nextPathResolveAttempt = now + delay;
-        } else {
-            cachedHead.pathResolveAttempts = 0;
-            cachedHead.nextPathResolveAttempt = {};
-        }
-    }
-    if (cachedHead.texturePath.empty()) return;
+    head.skinKey = makeSkinKey(entry.skin, *image);
+    head.hasSkinKey = true;
+    head.nextAttempt = now + std::chrono::seconds(2); // a failed attempt is not repeated every frame
 
-    if (!cachedHead.texture.textureData &&
-        (cachedHead.nextTextureLoadAttempt == std::chrono::steady_clock::time_point {} ||
-         now >= cachedHead.nextTextureLoadAttempt)) {
-        dc.renderCtx->getTexture(&cachedHead.texture,
-                                 SDK::ResourceLocation(cachedHead.texturePath, SDK::ResourceFileSystem::Raw), true);
-        if (!cachedHead.texture.textureData) {
-            cachedHead.textureLoadAttempts++;
-            std::chrono::milliseconds delay = cachedHead.textureLoadAttempts <= 1   ? std::chrono::milliseconds(500)
-                                              : cachedHead.textureLoadAttempts == 2 ? std::chrono::milliseconds(1000)
-                                              : cachedHead.textureLoadAttempts == 3 ? std::chrono::milliseconds(2000)
-                                                                                    : std::chrono::milliseconds(10000);
-            cachedHead.nextTextureLoadAttempt = now + delay;
-        } else {
-            cachedHead.textureLoadAttempts = 0;
-            cachedHead.nextTextureLoadAttempt = {};
+    // classic layout: face at (8, 8), hat layer at (40, 8), 8x8 pixels at 64 px width (twice as much for 128 px skins)
+    const uint32_t w = image->width, h = image->height;
+    const uint32_t unit = std::max(1u, w / 64u);
+    const uint32_t fs = 8u * unit;
+    if (w < 48u * unit || h < 16u * unit) return nullptr;
+    const uint8_t* px = image->bytes.data();
+    auto at = [&](uint32_t x, uint32_t y) { return px + (static_cast<size_t>(y) * w + x) * 4u; };
+
+    std::vector<uint32_t> out(static_cast<size_t>(fs) * fs);
+    for (uint32_t y = 0; y < fs; ++y) {
+        for (uint32_t x = 0; x < fs; ++x) {
+            const uint8_t* face = at(8u * unit + x, 8u * unit + y);
+            const uint8_t* hat = at(40u * unit + x, 8u * unit + y);
+            const float ha = static_cast<float>(hat[3]) / 255.f;
+            const auto mixc = [&](int i) { return static_cast<uint32_t>(std::clamp(face[i] * (1.f - ha) + hat[i] * ha, 0.f, 255.f)); };
+            out[static_cast<size_t>(y) * fs + x] = (255u << 24) | (mixc(0) << 16) | (mixc(1) << 8) | mixc(2); // BGRA, opaque
         }
     }
 
-    if (!cachedHead.texture.textureData) return;
-
-    dc.renderCtx->drawImage(cachedHead.texture, { bounds.left * dc.guiScale, bounds.top * dc.guiScale },
-                            { bounds.getWidth() * dc.guiScale, bounds.getHeight() * dc.guiScale }, { 0.f, 0.f },
-                            { 1.f, 1.f });
-    dc.renderCtx->flushImages(d2d::Colors::WHITE, 1.f, SDK::HashedString("ui_textured_and_glcolor_sprite"));
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    if (FAILED(ctx->CreateBitmap(D2D1::SizeU(fs, fs), out.data(), fs * 4u, props, head.bitmap.ReleaseAndGetAddressOf()))) return nullptr;
+    D2D1_BITMAP_BRUSH_PROPERTIES1 bp =
+        D2D1::BitmapBrushProperties1(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    ComPtr<ID2D1DeviceContext> dc;
+    if (FAILED(ctx->QueryInterface(IID_PPV_ARGS(dc.GetAddressOf()))) ||
+        FAILED(dc->CreateBitmapBrush(head.bitmap.Get(), &bp, nullptr, head.brush.ReleaseAndGetAddressOf()))) {
+        head.bitmap.Reset();
+        return nullptr;
+    }
+    head.faceSize = fs;
+    return &head;
 }
 
 ColorValue TabList::getColorOrDefault(ValueType const& value, ColorValue const& fallback) const {
@@ -289,109 +267,78 @@ void TabList::afterLoadConfig() {
     }
 }
 
-void TabList::onRenderLayer(Event& evG) {
-    auto& ev = static_cast<RenderLayerEvent&>(evG);
-    auto* screenView = ev.getScreenView();
-    if (!screenView || !screenView->visualTree || !screenView->visualTree->rootControl ||
-        screenView->visualTree->rootControl->name != "hud_screen")
-        return;
 
-    auto plr = SDK::ClientInstance::get()->getLocalPlayer();
-    if (!plr) return;
+void TabList::onRenderOverlay(Event& evG) {
+    auto& ev = static_cast<RenderOverlayEvent&>(evG);
+    auto* d2dCtx = ev.getDeviceContext();
+    auto& rend = Ma4::getRenderer();
+    if (!d2dCtx || !rend.hasInitialized()) return;
 
-    MCDrawUtil dc { ev.getUIRenderContext(), Ma4::get().getFont() };
-    dc.setImmediate(false);
-    auto lvl = SDK::ClientInstance::get()->minecraft->getLevel();
+    auto* client = SDK::ClientInstance::get();
+    if (!client || !client->minecraft || !client->minecraftGame || !client->getLocalPlayer()) return;
+    // only in the world: with a menu, the inventory or the chat open the cursor is free and the list stays away
+    if (!client->minecraftGame->isCursorGrabbed()) return;
+    if (Ma4::getScreenManager().getActiveScreen()) return;
+    auto* lvl = client->minecraft->getLevel();
     if (!lvl || !lvl->getPlayerList()) return;
 
-    size_t size = lvl->getPlayerList()->size();
-    if (cachedRows.size() != size || cachedActivePlayerNames.empty()) {
-        syncNameTagCache(lvl);
-    }
-    if (rowsDirty) {
-        rebuildRows(lvl);
-    }
-    size = cachedRows.size();
+    const size_t count = lvl->getPlayerList()->size();
+    if (cachedRows.size() != count || cachedActivePlayerNames.empty()) syncNameTagCache(lvl);
+    if (rowsDirty) rebuildRows(lvl);
 
-    float textP = getFloatOrDefault(textSizeS, 20.f);
-
-    std::wstring txt;
+    // ---- title: the server, or the world
+    std::wstring title;
     auto* connectionInfo = SDK::RemoteConnectorComposite::getConnectionInfo();
     if (connectionInfo && !connectionInfo->thirdPartyServerInfo.creatorName.empty()) {
-        txt = util::StrToWStr(connectionInfo->thirdPartyServerInfo.creatorName);
+        title = util::StrToWStr(connectionInfo->thirdPartyServerInfo.creatorName);
     } else {
-        txt = util::StrToWStr(lvl->getLevelName());
+        title = util::StrToWStr(lvl->getLevelName());
     }
+    // the title may carry colour codes too (servers like to): show the plain text
+    title = util::StrToWStr(Ma4::get().getNameTagCache().stripFormatCodes(util::WStrToStr(title)));
+    if (title.empty()) title = L"Players";
 
-    constexpr auto font = Renderer::FontSelection::PrimaryRegular;
+    std::wstring subtitle = LocalizeString::get("client.module.tabList.players").value();
+    if (size_t p = subtitle.find(L"{}"); p != std::wstring::npos) subtitle.replace(p, 2, std::to_wstring(cachedRows.size()));
+
     const ColorValue textColor = getColorOrDefault(textCol, ColorValue(1.f, 1.f, 1.f, 1.f));
     const ColorValue backgroundColor = getColorOrDefault(bgCol, ColorValue(0.f, 0.f, 0.f, 0.5f));
-    float sectionHeight = textP * 1.3f;
-    float headSize = std::max(1.f, std::min(textP, sectionHeight - 4.f));
-    float headGap = std::max(2.f, textP * 0.2f);
-    float headInset = 2.f;
-    float rowTextOffset = headInset + headSize + headGap;
 
-    updateLayoutMeasurements(dc, txt, textP, rowTextOffset);
+    ios::TabData data;
+    data.title = std::move(title);
+    data.subtitle = std::move(subtitle);
+    data.textColor = d2d::Color(textColor.getMainColor());
+    data.veil = d2d::Color(backgroundColor.getMainColor());
+    auto ss = rend.getScreenSize();
+    data.screenW = ss.width;
+    data.screenH = ss.height;
 
-    float sectionSize = std::max(1.f, cachedLongestText);
+    std::unordered_map<std::string, SDK::PlayerListEntry*> entries;
+    entries.reserve(count);
+    for (auto& ent : *lvl->getPlayerList()) entries.emplace(ent.second.name, &ent.second);
 
-    size_t maxPerTab = 16;
-    int numTabs = std::max(1, static_cast<int>(std::ceil(static_cast<float>(size) / static_cast<float>(maxPerTab))));
-
-    float oY = sectionHeight;
-
-    float calcWidth = sectionSize * static_cast<float>(numTabs);
-    float calcHeight = sectionHeight * ((static_cast<float>(size) > maxPerTab) ? maxPerTab : static_cast<float>(size));
-
-    auto& ss = SDK::ClientInstance::get()->getGuiData()->screenSize;
-    const Vec2 offset = { ss.x / 2.f - calcWidth / 2.f, 20.f };
-
-    dc.fillRectangle({ offset.x, offset.y, offset.x + calcWidth, offset.y + calcHeight + oY },
-                     backgroundColor.getMainColor());
-    dc.drawRectangle({ offset.x, offset.y, offset.x + calcWidth, offset.y + calcHeight + oY },
-                     d2d::Color(backgroundColor.getMainColor()).asAlpha(1.f), 2.f);
-
-    dc.drawText({ offset.x, offset.y, offset.x + calcWidth, offset.y + oY }, txt, textColor.getMainColor(), font, textP,
-                DWRITE_TEXT_ALIGNMENT_CENTER);
-    dc.flush(false, true);
-
-    auto rowRect = [&](size_t rowIndex) {
-        size_t column = rowIndex / maxPerTab;
-        size_t rowInColumn = rowIndex % maxPerTab;
-        float x = sectionSize * static_cast<float>(column);
-        float y = oY + sectionHeight * static_cast<float>(rowInColumn);
-        return d2d::Rect { offset.x + x, offset.y + y, offset.x + x + sectionSize, offset.y + y + sectionHeight };
-    };
-
-    std::unordered_map<std::string, SDK::PlayerListEntry*> currentEntries;
-    currentEntries.reserve(lvl->getPlayerList()->size());
-    for (auto& ent : *lvl->getPlayerList()) {
-        currentEntries.emplace(ent.second.name, &ent.second);
+    data.rows.reserve(cachedRows.size());
+    for (auto& row : cachedRows) {
+        ios::TabRow r;
+        r.text = row.displayNameWide;
+        if (auto it = entries.find(row.playerName); it != entries.end() && it->second) {
+            if (auto* head = headFor(d2dCtx, *it->second, row.playerName)) {
+                r.face = head->brush.Get();
+                r.faceSize = static_cast<float>(head->faceSize);
+            }
+        }
+        data.rows.push_back(std::move(r));
     }
 
-    for (size_t rowIndex = 0; rowIndex < cachedRows.size(); ++rowIndex) {
-        auto& row = cachedRows[rowIndex];
-        auto entry = currentEntries.find(row.playerName);
-        if (entry == currentEntries.end() || !entry->second) continue;
-
-        d2d::Rect rc = rowRect(rowIndex);
-        d2d::Rect headRect = { rc.left + headInset, rc.top + ((sectionHeight - headSize) * 0.5f),
-                               rc.left + headInset + headSize,
-                               rc.top + ((sectionHeight - headSize) * 0.5f) + headSize };
-        drawPlayerHead(dc, *entry->second, row.playerName, headRect);
-    }
-
-    for (size_t rowIndex = 0; rowIndex < cachedRows.size(); ++rowIndex) {
-        auto& row = cachedRows[rowIndex];
-        d2d::Rect rc = rowRect(rowIndex);
-
-        d2d::Rect textRect = rc;
-        textRect.left += rowTextOffset;
-
-        dc.drawText(textRect, row.displayNameWide, textColor.getMainColor(), font, textP, DWRITE_TEXT_ALIGNMENT_LEADING,
-                    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, false);
-    }
-
-    dc.flush();
+    // ---- one toolkit frame; the size setting scales the whole card
+    const float textP = std::clamp(getFloatOrDefault(textSizeS, 20.f), 6.f, 100.f);
+    const float sc = std::clamp(ios::gameScale() * 0.82f * (textP / 20.f), 0.45f, 3.f);
+    ios::Input in;
+    in.dt = rend.getDeltaTime() * 0.017f;
+    auto& ui = ios::Ui::get();
+    ui.beginFrame(ios::gameGfx(), in, ios::gamePalette(), sc, Ma4::get().getL10nData().isSelectedLanguageRightToLeft());
+    static const uint64_t kPop = ios::Ui::hashId("ma4.tablist.pop");
+    ios::drawTabList(ui, data, kPop, !shownLastFrame);
+    shownLastFrame = true;
+    ui.endFrame();
 }

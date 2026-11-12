@@ -69,7 +69,7 @@ public:
     Ma4() = default;
     ~Ma4() = default;
 
-    static constexpr std::string_view version = "v1.1.0";
+    static constexpr std::string_view version = "v1.2.0";
     static constexpr std::array<std::string_view, 1> supportedMinecraftVersions = {
         "1.26.6x",
     };

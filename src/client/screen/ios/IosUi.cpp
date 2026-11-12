@@ -206,9 +206,13 @@ namespace ios {
         g = gfx;
         in = input;
         pal = palette;
-        scale = uiScale;
+        // a NaN / zero from the host (timer glitch, zero sized window) must never reach the springs: every animation
+        // would stay at its start value and the window would simply not appear
+        scale = (std::isfinite(uiScale) && uiScale > 0.1f) ? uiScale : 1.f;
         rtl = rightToLeft;
-        dt = std::clamp(input.dt, 0.001f, 0.05f);
+        dt = std::isfinite(input.dt) ? std::clamp(input.dt, 0.001f, 0.05f) : 1.f / 60.f;
+        if (!std::isfinite(in.mouse.x) || !std::isfinite(in.mouse.y)) in.mouse = Vec2(-1.0e4f, -1.0e4f);
+        if (!std::isfinite(in.wheel)) in.wheel = 0.f;
         locked_ = false;
         hitClips_.clear();
         hitClips_.push_back(Rect(-1.0e7f, -1.0e7f, 1.0e7f, 1.0e7f));
@@ -218,6 +222,7 @@ namespace ios {
         mirrorDepth = 0;
         layerFlags_.clear();
         stats = Stats {};
+        inFrame_ = true;
 
         // cached layouts / brushes belong to the fonts and the device context they were created with
         bool fontsChanged = false;
@@ -245,6 +250,7 @@ namespace ios {
     }
 
     void Ui::endFrame() {
+        inFrame_ = false;
         // Safety net for unbalanced clip pushes.
         while (!clipKinds_.empty()) {
             if (clipKinds_.back() == 0) {
@@ -254,6 +260,11 @@ namespace ios {
             }
         }
         while (mirrorDepth > 0) popMirror();
+        while (!layerFlags_.empty()) popOpacity();
+        if (!scaleStack_.empty() && g.ctx) {
+            g.ctx->SetTransform(scaleStack_.front());
+            scaleStack_.clear();
+        }
 
         // drop cache entries that were not used for ~3 seconds (and keep both caches bounded)
         if ((frame_ & 63u) == 0) {

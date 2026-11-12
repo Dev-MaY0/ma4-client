@@ -57,16 +57,17 @@ namespace {
     };
 
     std::wstring niceTitle(std::filesystem::path const& p) {
-        // ma4-replay-YYYYMMDD-HHMMSS
-        std::string stem = p.stem().string();
-        auto pos = stem.rfind("replay-");
-        if (pos != std::string::npos && stem.size() >= pos + 7 + 15) {
-            std::string d = stem.substr(pos + 7, 8);
-            std::string t = stem.substr(pos + 7 + 9, 6);
-            return util::StrToWStr(d.substr(0, 4) + "-" + d.substr(4, 2) + "-" + d.substr(6, 2) + "  " + t.substr(0, 2) +
-                                   ":" + t.substr(2, 2) + ":" + t.substr(4, 2));
+        // ma4-replay-YYYYMMDD-HHMMSS. (wstring on purpose: path::string() throws for names that are not representable
+        // in the ANSI code page, e.g. a replay somebody copied into the folder)
+        std::wstring stem = p.stem().wstring();
+        auto pos = stem.rfind(L"replay-");
+        if (pos != std::wstring::npos && stem.size() >= pos + 7 + 15) {
+            std::wstring d = stem.substr(pos + 7, 8);
+            std::wstring t = stem.substr(pos + 7 + 9, 6);
+            return d.substr(0, 4) + L"-" + d.substr(4, 2) + L"-" + d.substr(6, 2) + L"  " + t.substr(0, 2) + L":" +
+                   t.substr(2, 2) + L":" + t.substr(4, 2);
         }
-        return util::StrToWStr(stem);
+        return stem;
     }
 
     std::wstring niceSize(uintmax_t bytes) {
@@ -397,16 +398,20 @@ std::vector<ios::ReplayEntry> const& ReplayStore::list() {
     cachedList.clear();
     files.clear();
 
+    // Nothing in here may throw: it runs on the render thread every time the menu shows the list. The non-throwing
+    // overloads are used throughout (a OneDrive placeholder or a file in use makes the throwing ones raise).
     std::error_code ec;
     std::vector<std::filesystem::path> paths;
-    for (auto const& entry : std::filesystem::directory_iterator(directory(), ec)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".ma4replay") paths.push_back(entry.path());
+    std::filesystem::directory_iterator dirIt(directory(), ec), dirEnd;
+    for (; !ec && dirIt != dirEnd; dirIt.increment(ec)) {
+        std::error_code entryEc;
+        if (dirIt->is_regular_file(entryEc) && dirIt->path().extension() == L".ma4replay") paths.push_back(dirIt->path());
     }
     std::sort(paths.begin(), paths.end(), std::greater<>());
 
     for (auto const& p : paths) {
         ios::ReplayEntry e;
-        e.id = ios::Ui::hashId(p.filename().string());
+        e.id = ios::Ui::hashId(util::WStrToStr(p.filename().wstring()));
         e.title = niceTitle(p);
 
         float duration = 0.f;

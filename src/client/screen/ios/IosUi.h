@@ -315,6 +315,9 @@ namespace ios {
         void setBackdrop(ID2D1Bitmap1* bmp, Rect const& dest);
         /// True while any spring / animation is still moving (hosts that render on demand keep drawing until it is false).
         [[nodiscard]] bool animating() const;
+        /// True between beginFrame() and endFrame(): code that draws from inside another toolkit frame (a HUD preview
+        /// in the menu) must not start a second one.
+        [[nodiscard]] bool inFrame() const { return inFrame_; }
         /// Fill / stroke a rounded (continuous-corner) rectangle with an arbitrary brush.
         void fillBrush(Rect const& r, float radius, ID2D1Brush* brush);
         void strokeBrush(Rect const& r, float radius, ID2D1Brush* brush, float thickness);
@@ -419,6 +422,7 @@ namespace ios {
         int mirrorDepth = 0;
         float mirrorCx_ = 0.f;
         bool locked_ = false;
+        bool inFrame_ = false;
         bool prevDown_ = false;
         uint64_t activeId_ = 0;
         uint64_t frame_ = 0;

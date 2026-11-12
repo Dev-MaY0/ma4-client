@@ -16,6 +16,8 @@
 #include "../../render/asset/Assets.h"
 #include "client/config/ConfigManager.h"
 #include "client/screen/ios/IosUi.h"
+#include "client/screen/ios/IosBridge.h"
+#include "util/Logger.h"
 #include "client/misc/ReplayStore.h"
 
 #include "../ScreenManager.h"
@@ -425,7 +427,42 @@ bool ClickGUI::fillDetail(uint64_t id, ios::ModuleDetail& d) {
     return true;
 }
 
+// A throwing frame must never take the game with it (an exception that escapes the overlay event leaves Direct2D with
+// open layers and kills the whole HUD) and must never leave the menu half drawn: the frame is abandoned, the toolkit is
+// unwound, and after repeated failures the toolkit state is rebuilt from scratch.
 void ClickGUI::onRender(Event&) {
+    try {
+        renderFrame();
+        renderFailures = 0;
+    } catch (std::exception const& e) {
+        reportRenderFailure(e.what());
+    } catch (...) {
+        reportRenderFailure("unknown exception");
+    }
+}
+
+void ClickGUI::reportRenderFailure(char const* what) {
+    ++renderFailures;
+    ++renderFailuresTotal;
+    if (renderFailuresTotal <= 5) Logger::Warn("ClickGUI: frame failed ({}): {}", renderFailuresTotal, what);
+
+    auto& ui = ios::Ui::get();
+    ui.endFrame(); // pops layers / clips / transforms the aborted frame left behind
+    if (auto* ctx = Ma4::getRenderer().getDeviceContext()) ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+
+    if (renderFailures == 3) {
+        // drop every cached resource and animation: a bad cache entry is the usual reason for a frame to keep failing
+        shell.releaseDeviceResources();
+        ui.releaseDeviceResources();
+        shell.reset(true);
+    } else if (renderFailures >= 30) {
+        renderFailures = 0;
+        Ma4::getNotifications().push(L"The menu could not be drawn. See the ma4 log (Logs/latest.log).");
+        if (isActive()) close();
+    }
+}
+
+void ClickGUI::renderFrame() {
     {
         auto scn = Ma4::getScreenManager().getActiveScreen();
         if (scn && scn->get().getName() != this->getName()) {
@@ -443,7 +480,9 @@ void ClickGUI::onRender(Event&) {
     rebuildMarketIfNeeded();
 
     auto& rend = Ma4::getRenderer();
+    if (!rend.hasInitialized() || !rend.getDeviceContext()) return;
     auto ss = rend.getScreenSize();
+    if (!(ss.width > 8.f && ss.height > 8.f)) return; // minimised / not laid out yet
     ios::Rect screen(0.f, 0.f, ss.width, ss.height);
 
     D2DUtil dc;
@@ -456,16 +495,8 @@ void ClickGUI::onRender(Event&) {
     }
     dc.fillRectangle(d2d::Rect(0.f, 0.f, ss.width, ss.height), d2d::Color(0.f, 0.f, 0.f, 0.26f * open));
 
-    ios::Gfx gfx;
-    gfx.ctx = rend.getDeviceContext();
-    gfx.brush = rend.getSolidBrush();
-    gfx.dwrite = rend.getDWriteFactory();
-    gfx.d2d = rend.getFactory();
-    gfx.fonts[static_cast<int>(ios::Font::Light)] = rend.getTextFormat(Renderer::FontSelection::PrimaryLight);
-    gfx.fonts[static_cast<int>(ios::Font::Regular)] = rend.getTextFormat(Renderer::FontSelection::PrimaryRegular);
-    gfx.fonts[static_cast<int>(ios::Font::Medium)] = rend.getTextFormat(Renderer::FontSelection::PrimaryMedium);
-    gfx.fonts[static_cast<int>(ios::Font::Semibold)] = rend.getTextFormat(Renderer::FontSelection::PrimarySemibold);
-    gfx.fonts[static_cast<int>(ios::Font::Bold)] = rend.getTextFormat(Renderer::FontSelection::PrimaryBold);
+    ios::Gfx gfx = ios::gameGfx(); // (substitutes a system font for any weight the renderer could not create)
+    if (!gfx.ctx || !gfx.brush || !gfx.dwrite || !gfx.d2d) return;
 
     ios::Input in;
     in.mouse = SDK::ClientInstance::get()->cursorPos;
@@ -516,6 +547,12 @@ void ClickGUI::onRender(Event&) {
     ui.endFrame();
 
     cursor = Cursor::Arrow;
+
+    if (!loggedOpen && isActive()) {
+        loggedOpen = true;
+        Logger::Info("ClickGUI opened: screen {}x{}, scale {:.2f}, ui scale setting {:.2f}", static_cast<int>(ss.width),
+                     static_cast<int>(ss.height), uiScale, Ma4::get().getUiScale());
+    }
 }
 
 void ClickGUI::onInit(Event&) {
@@ -565,6 +602,7 @@ void ClickGUI::onEnable(bool ignoreAnims) {
     pendingWheel = 0.f;
     shell.reset(ignoreAnims);
     shellVisible = true;
+    loggedOpen = false;
 }
 
 void ClickGUI::onDisable() {

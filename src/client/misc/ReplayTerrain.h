@@ -10,7 +10,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace SDK {
@@ -42,6 +44,7 @@ private:
     struct BlockInfo {
         Kind kind = Kind::Skip;
         uint8_t rgb[3] = { 128, 128, 128 };
+        int64_t nameHash = 0; // hash of the block id this entry was made for (detects a re-used BlockLegacy address)
     };
     struct Build {
         ios::ReplayTerrainChunk data;
@@ -60,6 +63,7 @@ private:
     std::unordered_map<int64_t, Build> chunks;
     bool disabled = false; // set when reading the world faulted once
     std::unordered_map<const void*, BlockInfo> infoCache;
+    std::unordered_set<std::string> loggedGuesses;
 };
 
 /// Block id ("grass_block", "oak_planks", ...) -> map colour. Exposed for tests / tooling.
@@ -67,6 +71,8 @@ namespace terrain {
     struct Classified {
         int kind = 1; // 0 skip, 1 solid, 2 liquid
         uint8_t rgb[3] = { 128, 128, 128 };
+        bool guessed = false; // no table entry: the colour comes from words in the id
+        bool unknown = false; // not even a word matched: stable colour derived from the id
     };
     Classified classifyName(std::string name);
 } // namespace terrain

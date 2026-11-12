@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/icon.png" width="128" alt="ma4 icon"></p>
 
-# ma4 Client  <small>v1.1.0</small>
+# ma4 Client  <small>v1.2.0</small>
 
 **ma4 Client** is a DLL modification for Minecraft Bedrock Edition (Windows 10/11) with an iPhone / iOS styled
 interface, 30+ customizable modules, a HUD editor, a replay recorder and a JavaScript plugin system.
@@ -25,6 +25,10 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
 | --- | --- |
 | ![Launcher](docs/screenshots/launcher-home.png) | ![Launcher settings](docs/screenshots/launcher-settings.png) |
 
+| Spotify HUD | Player list (Tab) |
+| --- | --- |
+| ![Spotify HUD](docs/screenshots/hud-spotify.png) | ![Player list](docs/screenshots/hud-tablist.png) |
+
 ## What is different from Latite
 
 - **Renamed** to ma4 Client (DLL: `ma4.dll`, data folder: `%LocalAppData%\ma4`).
@@ -38,6 +42,8 @@ Rendered offline by [`tools/ui-harness`](tools/ui-harness) (same UI code as the 
   and notification banners use the same design language.
 - **Launcher.** `Ma4Launcher.exe` is an iOS lock-screen styled window (date, big clock, **Ma4** title, glass buttons over
   a wallpaper you can choose) that starts Minecraft and loads `ma4.dll`. See [Launcher](#launcher).
+- **Spotify HUD and player list.** The song playing in Spotify (artwork, progress, synced lyrics) and the Tab player list
+  are iOS cards too. See [Spotify HUD](#spotify-hud).
 - **Typography.** SF Pro is used automatically when it is installed, otherwise Segoe UI Variable / Segoe UI.
 - **Replay (beta).** A data recorder (your path, nearby players / mobs, markers, **terrain map**) and a Replay page
   with a top-down viewer: map, timeline scrubber with markers, play / pause, 0.5x - 4x speed, pan / zoom, and a
@@ -110,6 +116,23 @@ date, a big clock, the **Ma4** title and Liquid Glass buttons over a wallpaper. 
 
 Not verified inside the real game: starting Minecraft and loading the DLL are the standard activation / `LoadLibraryW`
 mechanisms and were tested against an ordinary process, but the launcher has not been run against the live game.
+
+## Spotify HUD
+
+The *Spotify* module (HUD tab) shows what Spotify is playing as an iOS "Now Playing" card: artwork, title, artist, a
+progress bar with the time, and the lyrics of the song line by line.
+
+- **Where the data comes from.** The song, the play state, the length and the position are read from the Windows media
+  controls (the same source as the volume flyout and the lock screen), on a background thread. The position shown is the
+  reported one plus the time since the report, so it is exact and follows seeks and pauses. If Windows cannot be asked, the
+  title of the Spotify window is used (title and artist only; the position is then an estimate). With *Any Media Player*
+  on, a browser or another player is shown when Spotify is not playing.
+- **Lyrics** are looked up on [LRCLIB](https://lrclib.net), a free open database, in a background thread. The only things
+  sent are the title, artist, album and length of the song, and only while *Show Lyrics* is on. A song without synced
+  lyrics shows a short note instead; *Lyrics Offset* moves every line earlier or later if a recording is a little off.
+- The module is hidden while nothing is playing (*Hide When Idle*); the HUD editor and the menu preview show a sample card.
+- `tools/nowplaying-probe` contains two small programs that print what the reader sees and what the lyrics lookup returns,
+  for troubleshooting without starting the game.
 
 ## Replay (beta)
 

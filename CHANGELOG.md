@@ -3,6 +3,44 @@
 All notable changes to ma4 Client. Versions follow `MAJOR.MINOR.PATCH`; the current version lives in
 `src/client/Ma4.h` (`Ma4::version`).
 
+## [1.2.0] - 2026-11-12
+
+### Added
+- **Spotify HUD** (new module, *HUD* tab): an iOS "Now Playing" card for the song playing in Spotify - artwork, title,
+  artist, a progress bar with elapsed / total time, and the **synced lyrics** (the current line in the middle, the
+  neighbours fading out above and below, sliding up with a spring when the line changes). The glass is tinted with the
+  colour of the artwork.
+  - The song, play state, length and position come from the Windows media controls (the data behind the volume flyout),
+    so they are exact: the position is the reported position plus the time that has passed since, and follows seeks,
+    pauses and track changes. If Windows cannot be asked, the title of the Spotify window is used (title / artist only,
+    position estimated).
+  - Lyrics come from [LRCLIB](https://lrclib.net) (free, no account). A background thread sends the title, artist, album
+    and length of the song and nothing else, and only while *Show Lyrics* is on; the render thread never waits for the
+    network. *Lyrics Offset* shifts the lines for fine adjustment.
+  - Settings: artwork, progress, lyrics, offset, hide when idle, any media player (browser, Apple Music, ...), width.
+    The editor and the menu preview show a sample card, so it can be placed without playing anything.
+
+### Changed
+- **Player list (Tab) is an iOS card.** A glass panel with the server name and the player count, one rounded list per
+  column, the face of every player as a rounded avatar (drawn from the skin, no game texture needed), and the name with
+  its Minecraft colour codes (dark colours are lifted so they stay readable). It pops in with a spring, fits itself to
+  the screen and still follows the *Text Size*, *Background Color* and *Hide Modules* settings.
+
+### Fixed
+- **Replay map: new blocks and add-on blocks.** The block colours come from the block id. Blocks of 1.20 / 1.21 and
+  everything else the tables did not know fell back to a random pastel, add-on blocks (Hive and other servers) were often
+  mistaken for plants and skipped (`bz:tall_grass`, `campfire`, `jack_o_lantern`, ...). The tables are much bigger
+  (copper family, tuff / mud / resin / pale oak / sculk / froglights / corals / mushrooms ...), plant detection is exact
+  for vanilla and careful for add-ons, unknown ids are coloured from the words in their name (`red_`, `_brick`, `_ore`,
+  `wood`, ...), and every block that still had to be guessed is written to the log once so the tables can grow.
+  The block cache is now validated against the block id: when a server re-registers its blocks, an address that now
+  belongs to another block no longer gets the colour of the old one.
+- **Menu that does not open or shows nothing on some PCs.** A frame that throws (or a font that could not be created, a
+  NaN time step, an unreadable replay folder / file name with characters outside the ANSI code page) no longer kills
+  the menu or the HUD: the frame is abandoned, the toolkit is unwound, caches are rebuilt after repeated failures, and a
+  system font is substituted for any weight the renderer could not create. The first lines of the problem go to
+  `Logs/latest.log`, which also gets a "ClickGUI opened: screen WxH, scale" line when the menu opens.
+
 ## [1.1.0] - 2026-11-12
 
 ### Added

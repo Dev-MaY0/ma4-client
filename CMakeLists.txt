@@ -196,6 +196,9 @@ target_link_libraries(ma4 PRIVATE
 
         # PlaySound for scripting
         winmm
+
+        # Windows runtime (media controls for the Spotify HUD)
+        windowsapp
 )
 
 add_subdirectory(src)
